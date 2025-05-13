@@ -67,6 +67,18 @@ The system consists of two main components:
    docker-compose up -d
    ```
 
+### Manage Docker Updates:
+```
+# Pull latest changes 
+cd /opt/lucky-ponds
+git pull
+
+# Rebuild and restart
+docker-compose down
+docker-compose build
+docker-compose up -d
+```
+
 ## API Endpoints
 
 The API provides the following endpoints:

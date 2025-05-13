@@ -14,7 +14,7 @@ API_PORT = int(os.getenv("API_PORT", "5000"))
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS", "").lower()
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app, resources={r"/api/*": {"origins": ["https://luckyponds.xyz", "http://localhost:3000"]}})
 
 def get_db_connection():
     """Create a database connection and return the connection object."""
