@@ -3,12 +3,11 @@ import os
 import json
 import time
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import sqlite3
 from web3 import Web3
 from web3.exceptions import BlockNotFound
 from web3.types import LogReceipt
-import threading
 from dotenv import load_dotenv
 
 # Configure logging
@@ -21,37 +20,53 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Configuration - Set these in your .env file
-RPC_URL = os.getenv("RPC_URL", "")
+# Configuration
+RPC_URL = os.getenv("RPC_URL", "https://rpc.hyperliquid-testnet.xyz/evm")
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS", "").lower()
-DB_PATH = os.getenv("DB_PATH", "lucky_ponds.db")
-START_BLOCK = int(os.getenv("START_BLOCK", "22169383"))
-BLOCK_BATCH_SIZE = int(os.getenv("BLOCK_BATCH_SIZE", "500"))
-POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "15"))  # In seconds
+DB_PATH = os.getenv("DB_PATH", "/app/data/lucky_ponds.db")
+START_BLOCK = int(os.getenv("START_BLOCK", "0"))
+POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # In seconds
+INITIAL_BATCH_SIZE = int(os.getenv("BLOCK_BATCH_SIZE", "100"))
 
 # Load ABI
-with open('contract_abi.json', 'r') as f:
-    CONTRACT_ABI = json.load(f)
+try:
+    with open('contract_abi.json', 'r') as f:
+        CONTRACT_ABI = json.load(f)
+except FileNotFoundError:
+    logger.error("contract_abi.json not found. Please create this file with the contract events ABI.")
+    CONTRACT_ABI = []
 
-# Connect to Web3
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
+# Connect to Web3 with extended timeout
+w3 = Web3(Web3.HTTPProvider(
+    RPC_URL,
+    request_kwargs={'timeout': 60}
+))
 
-# Event signatures we're interested in
-EVENT_SIGNATURES = {
-    'CoinTossed': contract.events.CoinTossed,
-    'LuckyFrogSelected': contract.events.LuckyFrogSelected,
-    'PondAction': contract.events.PondAction,
-    'ConfigUpdated': contract.events.ConfigUpdated,
-    # Add any other events you're interested in
-}
+# Create contract instance if ABI is available
+if CONTRACT_ABI:
+    contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=CONTRACT_ABI)
+    # Event signatures we're interested in
+    EVENT_SIGNATURES = {
+        'CoinTossed': contract.events.CoinTossed,
+        'LuckyFrogSelected': contract.events.LuckyFrogSelected,
+        'PondAction': contract.events.PondAction,
+        'ConfigUpdated': contract.events.ConfigUpdated,
+    }
+else:
+    logger.warning("No ABI loaded. Please ensure contract_abi.json exists and is valid.")
+    EVENT_SIGNATURES = {}
 
-class BlockchainIndexer:
+class AdaptiveBlockchainIndexer:
     def __init__(self, db_path: str):
         """Initialize the blockchain indexer with the database path."""
         self.db_path = db_path
         self.setup_database()
         self.last_indexed_block = self.get_last_indexed_block()
+        self.current_batch_size = INITIAL_BATCH_SIZE
+        self.min_batch_size = 5
+        self.max_batch_size = 200
+        self.backoff_factor = 0.5  # How much to reduce batch size on failure
+        self.success_factor = 1.1  # How much to increase batch size on success (10%)
         
     def setup_database(self):
         """Create the database tables if they don't exist."""
@@ -156,6 +171,22 @@ class BlockchainIndexer:
         conn.commit()
         conn.close()
         self.last_indexed_block = block_number
+    
+    def process_event(self, event: Dict[str, Any], block_timestamp: int):
+        """Process an event based on its type."""
+        event_name = event['event']
+        
+        try:
+            if event_name == 'CoinTossed':
+                self.process_coin_tossed_event(event, block_timestamp)
+            elif event_name == 'LuckyFrogSelected':
+                self.process_lucky_frog_selected_event(event, block_timestamp)
+            elif event_name == 'PondAction':
+                self.process_pond_action_event(event, block_timestamp)
+            elif event_name == 'ConfigUpdated':
+                self.process_config_updated_event(event, block_timestamp)
+        except Exception as e:
+            logger.error(f"Error processing {event_name} event: {e}")
     
     def process_coin_tossed_event(self, event: Dict[str, Any], block_timestamp: int):
         """Process and save a CoinTossed event."""
@@ -274,20 +305,6 @@ class BlockchainIndexer:
         finally:
             conn.close()
     
-    def process_event(self, event: Dict[str, Any], block_timestamp: int):
-        """Process an event based on its type."""
-        event_name = event['event']
-        
-        if event_name == 'CoinTossed':
-            self.process_coin_tossed_event(event, block_timestamp)
-        elif event_name == 'LuckyFrogSelected':
-            self.process_lucky_frog_selected_event(event, block_timestamp)
-        elif event_name == 'PondAction':
-            self.process_pond_action_event(event, block_timestamp)
-        elif event_name == 'ConfigUpdated':
-            self.process_config_updated_event(event, block_timestamp)
-        # Add handlers for any other events you're interested in
-    
     def process_logs(self, logs: List[LogReceipt], block_timestamps: Dict[int, int]):
         """Process a list of event logs."""
         for log in logs:
@@ -299,45 +316,143 @@ class BlockchainIndexer:
                     block_timestamp = block_timestamps.get(log['blockNumber'], 0)
                     self.process_event(decoded_log, block_timestamp)
                     break  # Stop trying other event signatures if one matches
-                except Exception as e:
+                except Exception:
                     # This log doesn't match this event signature, continue to the next
                     continue
+
+    def try_get_logs(self, start_block: int, end_block: int, max_retries: int = 3) -> Tuple[bool, List[LogReceipt]]:
+        """Try to get logs for a range of blocks with retries."""
+        for attempt in range(max_retries):
+            try:
+                logs = w3.eth.get_logs({
+                    'fromBlock': start_block,
+                    'toBlock': end_block,
+                    'address': Web3.to_checksum_address(CONTRACT_ADDRESS)
+                })
+                return True, logs
+            except Exception as e:
+                delay = 2 ** attempt
+                logger.error(f"Error getting logs for blocks {start_block}-{end_block} (attempt {attempt+1}/{max_retries}): {e}")
+                
+                # Check for invalid block range error
+                if "invalid block range" in str(e).lower():
+                    logger.warning("Invalid block range detected")
+                    return False, []
+                
+                # Check for rate limiting
+                if "rate limited" in str(e).lower():
+                    delay = delay * 2
+                    logger.warning(f"Rate limit encountered. Waiting {delay} seconds before retry...")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    logger.error("Max retries reached")
+                    return False, []
+        
+        return False, []
+
+    def try_get_block(self, block_number: int, max_retries: int = 3) -> Tuple[bool, Any]:
+        """Try to get a block with retries."""
+        for attempt in range(max_retries):
+            try:
+                block = w3.eth.get_block(block_number)
+                return True, block
+            except Exception as e:
+                delay = 2 ** attempt
+                logger.error(f"Error getting block {block_number} (attempt {attempt+1}/{max_retries}): {e}")
+                
+                # Check for rate limiting
+                if "rate limited" in str(e).lower():
+                    delay = delay * 2
+                    logger.warning(f"Rate limit encountered. Waiting {delay} seconds before retry...")
+                
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    logger.error("Max retries reached")
+                    return False, None
+        
+        return False, None
     
-    def index_blocks(self, start_block: int, end_block: int):
-        """Index events from a range of blocks."""
-        logger.info(f"Indexing blocks from {start_block} to {end_block}")
+    def process_block_range(self, start_block: int, end_block: int) -> bool:
+        """Process a range of blocks, and adjust batch size based on success/failure."""
+        logger.info(f"Processing blocks {start_block} to {end_block} (batch size: {self.current_batch_size})")
         
-        # We need to get block timestamps for each block
-        block_timestamps = {}
+        # Try to get logs for the range
+        success, logs = self.try_get_logs(start_block, end_block)
         
-        try:
-            # Get event logs from all blocks in the range
-            logs = w3.eth.get_logs({
-                'fromBlock': start_block,
-                'toBlock': end_block,
-                'address': Web3.to_checksum_address(CONTRACT_ADDRESS)
-            })
+        if not success:
+            # Reduce batch size for next time
+            new_batch_size = max(self.min_batch_size, int(self.current_batch_size * self.backoff_factor))
+            logger.warning(f"Reducing batch size from {self.current_batch_size} to {new_batch_size}")
+            self.current_batch_size = new_batch_size
             
-            # Get timestamps for each unique block
+            # If range is too large, try processing a smaller range
+            if end_block - start_block > self.min_batch_size:
+                mid_block = start_block + self.min_batch_size
+                logger.info(f"Falling back to smaller range: {start_block} to {mid_block}")
+                result = self.process_block_range(start_block, mid_block)
+                
+                # If successful, try the next small batch
+                if result and mid_block < end_block:
+                    next_end = min(mid_block + self.min_batch_size, end_block)
+                    return self.process_block_range(mid_block + 1, next_end)
+                return result
+            else:
+                # Process blocks one at a time as last resort
+                logger.info("Processing blocks one by one as fallback")
+                for block_num in range(start_block, end_block + 1):
+                    success = self.process_single_block(block_num)
+                    if not success:
+                        return False
+                return True
+        
+        # We got logs successfully, now get block timestamps
+        block_timestamps = {}
+        if logs:
             unique_blocks = set(log['blockNumber'] for log in logs)
             for block_num in unique_blocks:
-                block = w3.eth.get_block(block_num)
-                block_timestamps[block_num] = block.timestamp
-            
-            # Process all logs with their timestamps
-            self.process_logs(logs, block_timestamps)
-            
-            # Update the last indexed block
-            self.update_last_indexed_block(end_block)
-            logger.info(f"Indexed {len(logs)} events from blocks {start_block} to {end_block}")
+                success, block = self.try_get_block(block_num)
+                if success:
+                    block_timestamps[block_num] = block.timestamp
+                else:
+                    logger.warning(f"Could not get timestamp for block {block_num}")
         
-        except Exception as e:
-            logger.error(f"Error indexing blocks {start_block} to {end_block}: {e}")
-            # Don't update the last indexed block on error
+        # Process the logs with their timestamps
+        self.process_logs(logs, block_timestamps)
+        
+        # Update the last indexed block
+        self.update_last_indexed_block(end_block)
+        
+        # Increase batch size for next time (success case)
+        new_batch_size = min(self.max_batch_size, int(self.current_batch_size * self.success_factor))
+        if new_batch_size > self.current_batch_size:
+            logger.info(f"Increasing batch size from {self.current_batch_size} to {new_batch_size}")
+            self.current_batch_size = new_batch_size
+        
+        return True
+    
+    def process_single_block(self, block_num: int) -> bool:
+        """Process a single block as a fallback method."""
+        logger.info(f"Processing single block {block_num}")
+        success, logs = self.try_get_logs(block_num, block_num)
+        
+        if success and logs:
+            success, block = self.try_get_block(block_num)
+            if success:
+                block_timestamps = {block_num: block.timestamp}
+                self.process_logs(logs, block_timestamps)
+        
+        # Always update the last indexed block to avoid getting stuck
+        self.update_last_indexed_block(block_num)
+        return success
     
     def start_indexing(self):
-        """Start the indexing process."""
-        logger.info(f"Starting indexer from block {self.last_indexed_block}")
+        """Start the indexing process with adaptive batch sizes."""
+        logger.info(f"Starting indexer from block {self.last_indexed_block} with initial batch size {self.current_batch_size}")
         
         while True:
             try:
@@ -352,16 +467,16 @@ class BlockchainIndexer:
                     time.sleep(POLLING_INTERVAL)
                     continue
                 
-                # Index in batches to avoid timeout
+                # Calculate the next batch within safe limit
                 start_block = self.last_indexed_block + 1
-                end_block = min(start_block + BLOCK_BATCH_SIZE - 1, safe_block)
+                end_block = min(start_block + self.current_batch_size - 1, safe_block)
                 
-                self.index_blocks(start_block, end_block)
+                # Process the batch
+                self.process_block_range(start_block, end_block)
                 
-                # If we've caught up to the safe block, wait before the next batch
-                if end_block >= safe_block:
-                    time.sleep(POLLING_INTERVAL)
-            
+                # Small delay to avoid hammering the RPC
+                time.sleep(1)
+                
             except BlockNotFound:
                 logger.error("Block not found, network might be syncing")
                 time.sleep(POLLING_INTERVAL)
@@ -370,5 +485,5 @@ class BlockchainIndexer:
                 time.sleep(POLLING_INTERVAL)
 
 if __name__ == "__main__":
-    indexer = BlockchainIndexer(DB_PATH)
+    indexer = AdaptiveBlockchainIndexer(DB_PATH)
     indexer.start_indexing()
