@@ -25,7 +25,7 @@ load_dotenv()
 RPC_URL = os.getenv("RPC_URL", "https://ethereum-rpc-url.com")
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS", "").lower()
 DB_PATH = os.getenv("DB_PATH", "lucky_ponds.db")
-START_BLOCK = int(os.getenv("START_BLOCK", "0"))
+START_BLOCK = int(os.getenv("START_BLOCK", "22169235"))
 BLOCK_BATCH_SIZE = int(os.getenv("BLOCK_BATCH_SIZE", "1000"))
 POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "15"))  # In seconds
 
