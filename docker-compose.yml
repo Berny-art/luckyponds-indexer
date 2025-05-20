@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Fast Blockchain Indexer (Runs Continuously)
   indexer:
     build: .
     container_name: lucky_ponds_indexer
@@ -13,9 +14,24 @@ services:
     networks:
       - lucky_ponds_network
 
+  # Points Calculator (Runs on Schedule)
+  calculator:
+    build: .
+    container_name: lucky_ponds_calculator
+    command: python scheduler.py --interval ${POINTS_CALCULATION_INTERVAL:-3600}
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - lucky_ponds_network
+
+  # API Server
   api:
     build: .
     container_name: lucky_ponds_api
+    command: gunicorn --bind 0.0.0.0:5000 app:app --workers 4 --timeout 120
     ports:
       - "${API_PORT:-5000}:5000"
     env_file:
@@ -26,6 +42,7 @@ services:
     networks:
       - lucky_ponds_network
 
+  # One-time Database Setup
   setup:
     build: .
     container_name: lucky_ponds_setup

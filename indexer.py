@@ -10,14 +10,6 @@ from web3.exceptions import BlockNotFound
 from web3.types import LogReceipt
 from dotenv import load_dotenv
 
-# Import referral system
-try:
-    from referral_system import check_and_activate_referral
-except ImportError:
-    # Define a dummy function if referral_system is not available
-    def check_and_activate_referral(address): 
-        return False
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -31,14 +23,10 @@ load_dotenv()
 # Configuration
 RPC_URL = os.getenv("RPC_URL", "https://rpc.hyperliquid-testnet.xyz/evm")
 CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS", "").lower()
-DB_PATH = os.getenv("DB_PATH", "/app/data/lucky_ponds.db")
+DB_PATH = os.getenv("DB_PATH", "./app/data/lucky_ponds.db")
 START_BLOCK = int(os.getenv("START_BLOCK", "0"))
-POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "30"))  # In seconds
-INITIAL_BATCH_SIZE = int(os.getenv("BLOCK_BATCH_SIZE", "100"))
-
-# Points system configuration
-TOSS_POINTS_MULTIPLIER = 10  # 10 points per amount tossed (in ETH)
-WIN_POINTS = 100  # Fixed 100 points for a win
+POLLING_INTERVAL = int(os.getenv("POLLING_INTERVAL", "10"))  # In seconds
+INITIAL_BATCH_SIZE = int(os.getenv("BLOCK_BATCH_SIZE", "200"))
 
 # Load ABI
 try:
@@ -51,7 +39,7 @@ except FileNotFoundError:
 # Connect to Web3 with extended timeout
 w3 = Web3(Web3.HTTPProvider(
     RPC_URL,
-    request_kwargs={'timeout': 60}
+    request_kwargs={'timeout': 120}
 ))
 
 # Create contract instance if ABI is available
@@ -69,17 +57,146 @@ else:
     logger.warning("No ABI loaded. Please ensure contract_abi.json exists and is valid.")
     EVENT_SIGNATURES = {}
 
-class BlockchainIndexer:
+class FastBlockchainIndexer:
     def __init__(self, db_path: str):
         """Initialize the blockchain indexer with the database path."""
         self.db_path = db_path
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.setup_database()
         self.last_indexed_block = self.get_last_indexed_block()
         self.current_batch_size = INITIAL_BATCH_SIZE
-        self.min_batch_size = 5
+        self.min_batch_size = 10
         self.max_batch_size = 500
         self.backoff_factor = 0.5  # How much to reduce batch size on failure
-        self.success_factor = 1.1  # How much to increase batch size on success (10%)
+        self.success_factor = 1.2  # How much to increase batch size on success (20%)
         
+    def setup_database(self):
+        """Set up the database tables if they don't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Create indexer_state table to track progress
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS indexer_state (
+                id INTEGER PRIMARY KEY,
+                last_block INTEGER NOT NULL,
+                last_updated_timestamp INTEGER NOT NULL
+            )
+            ''')
+            
+            # Check if we need to initialize the indexer_state
+            cursor.execute('SELECT COUNT(*) FROM indexer_state')
+            if cursor.fetchone()[0] == 0:
+                current_time = int(time.time())
+                cursor.execute('INSERT INTO indexer_state (id, last_block, last_updated_timestamp) VALUES (1, ?, ?)', 
+                              (START_BLOCK, current_time))
+                logger.info(f"Initialized indexer state with block {START_BLOCK}")
+            
+            # Create coin_tossed_events table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS coin_tossed_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_timestamp INTEGER NOT NULL,
+                pond_type TEXT NOT NULL,
+                frog_address TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                total_pond_tosses INTEGER NOT NULL,
+                total_pond_value TEXT NOT NULL,
+                points_processed INTEGER DEFAULT 0,
+                UNIQUE(tx_hash, pond_type, frog_address)
+            )
+            ''')
+            logger.info("Created or verified coin_tossed_events table")
+            
+            # Create lucky_winner_selected_events table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lucky_winner_selected_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_timestamp INTEGER NOT NULL,
+                pond_type TEXT NOT NULL,
+                winner_address TEXT NOT NULL,
+                prize TEXT NOT NULL,
+                selector TEXT NOT NULL,
+                points_processed INTEGER DEFAULT 0,
+                UNIQUE(tx_hash, pond_type)
+            )
+            ''')
+            logger.info("Created or verified lucky_winner_selected_events table")
+            
+            # Create pond_action_events table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pond_action_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_timestamp INTEGER NOT NULL,
+                pond_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                start_time INTEGER NOT NULL,
+                end_time INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                UNIQUE(tx_hash, pond_type)
+            )
+            ''')
+            logger.info("Created or verified pond_action_events table")
+            
+            # Create config_changed_events table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS config_changed_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_timestamp INTEGER NOT NULL,
+                config_type TEXT NOT NULL,
+                pond_type TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                old_address TEXT,
+                new_address TEXT,
+                UNIQUE(tx_hash, config_type, pond_type)
+            )
+            ''')
+            logger.info("Created or verified config_changed_events table")
+            
+            # Create emergency_action_events table
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS emergency_action_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_timestamp INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                token TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                pond_type TEXT NOT NULL,
+                UNIQUE(tx_hash, pond_type, recipient)
+            )
+            ''')
+            logger.info("Created or verified emergency_action_events table")
+            
+            # Create indices for better query performance
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_coin_tossed_block ON coin_tossed_events (block_number)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_lucky_winner_block ON lucky_winner_selected_events (block_number)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_coin_tossed_processed ON coin_tossed_events (points_processed)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_lucky_winner_processed ON lucky_winner_selected_events (points_processed)')
+            
+            conn.commit()
+            logger.info("Database setup completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error setting up database: {e}")
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    
     def get_last_indexed_block(self) -> int:
         """Get the last indexed block from the database."""
         conn = sqlite3.connect(self.db_path)
@@ -91,20 +208,24 @@ class BlockchainIndexer:
                 return result[0]
             else:
                 # If no record exists, insert initial record
-                cursor.execute('INSERT INTO indexer_state (id, last_block) VALUES (1, ?)', (START_BLOCK,))
+                current_time = int(time.time())
+                cursor.execute('INSERT INTO indexer_state (id, last_block, last_updated_timestamp) VALUES (1, ?, ?)', 
+                              (START_BLOCK, current_time))
                 conn.commit()
                 return START_BLOCK
         except sqlite3.OperationalError:
-            logger.error("indexer_state table not found. Please run database setup script first.")
+            logger.error("indexer_state table not found. Database setup might have failed.")
             return START_BLOCK
         finally:
             conn.close()
     
     def update_last_indexed_block(self, block_number: int):
         """Update the last indexed block in the database."""
+        current_time = int(time.time())
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('UPDATE indexer_state SET last_block = ? WHERE id = 1', (block_number,))
+        cursor.execute('UPDATE indexer_state SET last_block = ?, last_updated_timestamp = ? WHERE id = 1', 
+                      (block_number, current_time))
         conn.commit()
         conn.close()
         self.last_indexed_block = block_number
@@ -127,51 +248,6 @@ class BlockchainIndexer:
         except Exception as e:
             logger.error(f"Error processing {event_name} event: {e}")
     
-    def add_user_points(self, address: str, event_type: str, points: int, tx_hash: str, pond_type: str, timestamp: int):
-        """Add points to a user's total and record the specific event."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        try:
-            # First, ensure the user exists in the user_points table
-            cursor.execute('''
-            INSERT OR IGNORE INTO user_points 
-            (address, total_points, toss_points, max_toss_points, winner_points, last_updated) 
-            VALUES (?, 0, 0, 0, 0, ?)
-            ''', (address.lower(), timestamp))
-            
-            # Update the specific point category and total points
-            if event_type == 'toss':
-                cursor.execute('''
-                UPDATE user_points 
-                SET toss_points = toss_points + ?, 
-                    total_points = total_points + ?,
-                    last_updated = ?
-                WHERE address = ?
-                ''', (points, points, timestamp, address.lower()))
-            elif event_type == 'winner':
-                cursor.execute('''
-                UPDATE user_points 
-                SET winner_points = winner_points + ?, 
-                    total_points = total_points + ?,
-                    last_updated = ?
-                WHERE address = ?
-                ''', (points, points, timestamp, address.lower()))
-            
-            # Record the specific point-earning event
-            cursor.execute('''
-            INSERT INTO user_point_events 
-            (address, event_type, points, tx_hash, pond_type, timestamp) 
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (address.lower(), event_type, points, tx_hash, pond_type, timestamp))
-            
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Error adding points for {address}: {e}")
-            conn.rollback()
-        finally:
-            conn.close()
-    
     def process_coin_tossed_event(self, event: Dict[str, Any], block_timestamp: int):
         """Process and save a CoinTossed event."""
         args = event['args']
@@ -183,7 +259,14 @@ class BlockchainIndexer:
             tx_hash = event['transactionHash'].hex()
             block_number = event['blockNumber']
             pond_type = args['pondType'].hex()
-            participant_address = args['participant'].lower()  # Updated from 'frog' to 'participant'
+            
+            # Handle different parameter names based on contract
+            participant_address = args.get('participant', args.get('frog', None))
+            if participant_address is None:
+                logger.error(f"Could not find participant/frog address in event: {args}")
+                return
+                
+            participant_address = participant_address.lower()
             amount = str(args['amount'])
             timestamp = args['timestamp']
             total_pond_tosses = args['totalPondTosses']
@@ -193,8 +276,9 @@ class BlockchainIndexer:
             cursor.execute('''
             INSERT INTO coin_tossed_events (
                 tx_hash, block_number, block_timestamp, pond_type, 
-                frog_address, amount, timestamp, total_pond_tosses, total_pond_value
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                frog_address, amount, timestamp, total_pond_tosses, total_pond_value,
+                points_processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ''', (
                 tx_hash,
                 block_number,
@@ -208,28 +292,6 @@ class BlockchainIndexer:
             ))
             conn.commit()
             
-            # Calculate points for toss - amount in ETH * multiplier
-            amount_in_eth = float(amount) / 10**18  # Convert from wei to ETH
-            toss_points = int(amount_in_eth * TOSS_POINTS_MULTIPLIER)
-            
-            # Award toss points
-            self.add_user_points(
-                participant_address,
-                'toss',
-                toss_points,
-                tx_hash,
-                pond_type,
-                block_timestamp
-            )
-            
-            # Check if this toss should activate a referral
-            try:
-                check_and_activate_referral(participant_address)
-            except Exception as e:
-                logger.error(f"Error checking referral activation: {e}")
-                
-            logger.info(f"Awarded {toss_points} points to {participant_address} for tossing in pond {pond_type}")
-                
         except sqlite3.IntegrityError:
             # Skip duplicate events
             pass
@@ -250,7 +312,14 @@ class BlockchainIndexer:
             tx_hash = event['transactionHash'].hex()
             block_number = event['blockNumber']
             pond_type = args['pondType'].hex()
-            winner_address = args['winner'].lower()  # Updated from 'luckyFrog' to 'winner'
+            
+            # Handle different parameter names based on contract
+            winner_address = args.get('winner', args.get('luckyFrog', None))
+            if winner_address is None:
+                logger.error(f"Could not find winner/luckyFrog address in event: {args}")
+                return
+                
+            winner_address = winner_address.lower()
             prize = str(args['prize'])
             selector = args['selector'].lower()
             
@@ -258,8 +327,8 @@ class BlockchainIndexer:
             cursor.execute('''
             INSERT INTO lucky_winner_selected_events (
                 tx_hash, block_number, block_timestamp, pond_type, 
-                winner_address, prize, selector
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                winner_address, prize, selector, points_processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
             ''', (
                 tx_hash,
                 block_number,
@@ -270,18 +339,6 @@ class BlockchainIndexer:
                 selector
             ))
             conn.commit()
-            
-            # Award points for being a winner (fixed amount)
-            self.add_user_points(
-                winner_address,
-                'winner',
-                WIN_POINTS,  # Fixed points for being a winner
-                tx_hash,
-                pond_type,
-                block_timestamp
-            )
-            
-            logger.info(f"Awarded {WIN_POINTS} points to {winner_address} for winning in pond {pond_type}")
             
         except sqlite3.IntegrityError:
             # Skip duplicate events
@@ -328,6 +385,9 @@ class BlockchainIndexer:
         cursor = conn.cursor()
         
         try:
+            # Get the right config type field name based on contract
+            config_type = args.get('configType', args.get('config', ''))
+            
             cursor.execute('''
             INSERT INTO config_changed_events (
                 tx_hash, block_number, block_timestamp, config_type, 
@@ -337,17 +397,20 @@ class BlockchainIndexer:
                 event['transactionHash'].hex(),
                 event['blockNumber'],
                 block_timestamp,
-                args['configType'],
+                config_type,
                 args['pondType'].hex(),
-                str(args['oldValue']) if args['oldValue'] is not None else None,
-                str(args['newValue']) if args['newValue'] is not None else None,
-                args['oldAddress'].lower() if args['oldAddress'] != '0x0000000000000000000000000000000000000000' else None,
-                args['newAddress'].lower() if args['newAddress'] != '0x0000000000000000000000000000000000000000' else None
+                str(args['oldValue']) if args.get('oldValue') is not None else None,
+                str(args['newValue']) if args.get('newValue') is not None else None,
+                args['oldAddress'].lower() if args.get('oldAddress', '0x0000000000000000000000000000000000000000') != '0x0000000000000000000000000000000000000000' else None,
+                args['newAddress'].lower() if args.get('newAddress', '0x0000000000000000000000000000000000000000') != '0x0000000000000000000000000000000000000000' else None
             ))
             conn.commit()
         except sqlite3.IntegrityError:
             # Skip duplicate events
             pass
+        except Exception as e:
+            logger.error(f"Error processing config changed event: {e}")
+            conn.rollback()
         finally:
             conn.close()
     
@@ -377,23 +440,219 @@ class BlockchainIndexer:
         except sqlite3.IntegrityError:
             # Skip duplicate events
             pass
+        except Exception as e:
+            logger.error(f"Error processing emergency action event: {e}")
+            conn.rollback()
         finally:
             conn.close()
     
     def process_logs(self, logs: List[LogReceipt], block_timestamps: Dict[int, int]):
-        """Process a list of event logs."""
-        for log in logs:
-            # Try to decode the log
-            for event_name, event_abi in EVENT_SIGNATURES.items():
-                try:
-                    # Decode the log
-                    decoded_log = event_abi().process_log(log)
-                    block_timestamp = block_timestamps.get(log['blockNumber'], 0)
-                    self.process_event(decoded_log, block_timestamp)
-                    break  # Stop trying other event signatures if one matches
-                except Exception:
-                    # This log doesn't match this event signature, continue to the next
-                    continue
+        """Process a list of event logs using a single database transaction for efficiency."""
+        if not logs:
+            return
+            
+        conn = sqlite3.connect(self.db_path)
+        conn.isolation_level = None  # Use autocommit mode
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('BEGIN TRANSACTION')
+            
+            processed_count = 0
+            for log in logs:
+                # Try to decode the log
+                for event_name, event_abi in EVENT_SIGNATURES.items():
+                    try:
+                        # Decode the log
+                        decoded_log = event_abi().process_log(log)
+                        block_timestamp = block_timestamps.get(log['blockNumber'], 0)
+                        
+                        # Process based on event type
+                        event_name = decoded_log['event']
+                        if event_name == 'CoinTossed':
+                            self._process_coin_tossed_transaction(cursor, decoded_log, block_timestamp)
+                        elif event_name == 'LuckyWinnerSelected':
+                            self._process_lucky_winner_transaction(cursor, decoded_log, block_timestamp)
+                        elif event_name == 'PondAction':
+                            self._process_pond_action_transaction(cursor, decoded_log, block_timestamp)
+                        elif event_name == 'ConfigChanged':
+                            self._process_config_changed_transaction(cursor, decoded_log, block_timestamp)
+                        elif event_name == 'EmergencyAction':
+                            self._process_emergency_action_transaction(cursor, decoded_log, block_timestamp)
+                        
+                        processed_count += 1
+                        break  # Stop trying other event signatures if one matches
+                    except Exception:
+                        # This log doesn't match this event signature, continue to the next
+                        continue
+            
+            cursor.execute('COMMIT')
+            logger.info(f"Successfully processed {processed_count} events in batch transaction")
+            
+        except Exception as e:
+            logger.error(f"Error in batch processing logs: {e}")
+            cursor.execute('ROLLBACK')
+        finally:
+            conn.close()
+    
+    def _process_coin_tossed_transaction(self, cursor, event, block_timestamp):
+        """Helper method to process CoinTossed events within a transaction."""
+        args = event['args']
+        
+        # Extract data from event
+        tx_hash = event['transactionHash'].hex()
+        block_number = event['blockNumber']
+        pond_type = args['pondType'].hex()
+        
+        # Handle different parameter names based on contract
+        participant_address = args.get('participant', args.get('frog', None))
+        if participant_address is None:
+            logger.error(f"Could not find participant/frog address in event: {args}")
+            return
+            
+        participant_address = participant_address.lower()
+        amount = str(args['amount'])
+        timestamp = args['timestamp']
+        total_pond_tosses = args['totalPondTosses']
+        total_pond_value = str(args['totalPondValue'])
+        
+        try:
+            # Insert into coin_tossed_events table
+            cursor.execute('''
+            INSERT INTO coin_tossed_events (
+                tx_hash, block_number, block_timestamp, pond_type, 
+                frog_address, amount, timestamp, total_pond_tosses, total_pond_value,
+                points_processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ''', (
+                tx_hash,
+                block_number,
+                block_timestamp,
+                pond_type,
+                participant_address,
+                amount,
+                timestamp,
+                total_pond_tosses,
+                total_pond_value
+            ))
+        except sqlite3.IntegrityError:
+            # Skip duplicate events
+            pass
+    
+    def _process_lucky_winner_transaction(self, cursor, event, block_timestamp):
+        """Helper method to process LuckyWinnerSelected events within a transaction."""
+        args = event['args']
+        
+        # Extract data from event
+        tx_hash = event['transactionHash'].hex()
+        block_number = event['blockNumber']
+        pond_type = args['pondType'].hex()
+        
+        # Handle different parameter names based on contract
+        winner_address = args.get('winner', args.get('luckyFrog', None))
+        if winner_address is None:
+            logger.error(f"Could not find winner/luckyFrog address in event: {args}")
+            return
+            
+        winner_address = winner_address.lower()
+        prize = str(args['prize'])
+        selector = args['selector'].lower()
+        
+        try:
+            # Insert into lucky_winner_selected_events table
+            cursor.execute('''
+            INSERT INTO lucky_winner_selected_events (
+                tx_hash, block_number, block_timestamp, pond_type, 
+                winner_address, prize, selector, points_processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+            ''', (
+                tx_hash,
+                block_number,
+                block_timestamp,
+                pond_type,
+                winner_address,
+                prize,
+                selector
+            ))
+        except sqlite3.IntegrityError:
+            # Skip duplicate events
+            pass
+    
+    def _process_pond_action_transaction(self, cursor, event, block_timestamp):
+        """Helper method to process PondAction events within a transaction."""
+        args = event['args']
+        
+        try:
+            cursor.execute('''
+            INSERT INTO pond_action_events (
+                tx_hash, block_number, block_timestamp, pond_type, 
+                name, start_time, end_time, action_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                event['transactionHash'].hex(),
+                event['blockNumber'],
+                block_timestamp,
+                args['pondType'].hex(),
+                args['name'],
+                args['startTime'],
+                args['endTime'],
+                args['actionType']
+            ))
+        except sqlite3.IntegrityError:
+            # Skip duplicate events
+            pass
+    
+    def _process_config_changed_transaction(self, cursor, event, block_timestamp):
+        """Helper method to process ConfigChanged events within a transaction."""
+        args = event['args']
+        
+        try:
+            # Get the right config type field name based on contract
+            config_type = args.get('configType', args.get('config', ''))
+            
+            cursor.execute('''
+            INSERT INTO config_changed_events (
+                tx_hash, block_number, block_timestamp, config_type, 
+                pond_type, old_value, new_value, old_address, new_address
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                event['transactionHash'].hex(),
+                event['blockNumber'],
+                block_timestamp,
+                config_type,
+                args['pondType'].hex(),
+                str(args['oldValue']) if args.get('oldValue') is not None else None,
+                str(args['newValue']) if args.get('newValue') is not None else None,
+                args['oldAddress'].lower() if args.get('oldAddress', '0x0000000000000000000000000000000000000000') != '0x0000000000000000000000000000000000000000' else None,
+                args['newAddress'].lower() if args.get('newAddress', '0x0000000000000000000000000000000000000000') != '0x0000000000000000000000000000000000000000' else None
+            ))
+        except sqlite3.IntegrityError:
+            # Skip duplicate events
+            pass
+    
+    def _process_emergency_action_transaction(self, cursor, event, block_timestamp):
+        """Helper method to process EmergencyAction events within a transaction."""
+        args = event['args']
+        
+        try:
+            cursor.execute('''
+            INSERT INTO emergency_action_events (
+                tx_hash, block_number, block_timestamp, action_type, 
+                recipient, token, amount, pond_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                event['transactionHash'].hex(),
+                event['blockNumber'],
+                block_timestamp,
+                args['actionType'],
+                args['recipient'].lower(),
+                args['token'].lower(),
+                str(args['amount']),
+                args['pondType'].hex()
+            ))
+        except sqlite3.IntegrityError:
+            # Skip duplicate events
+            pass
 
     def try_get_logs(self, start_block: int, end_block: int, max_retries: int = 3) -> Tuple[bool, List[LogReceipt]]:
         """Try to get logs for a range of blocks with retries."""
@@ -415,7 +674,7 @@ class BlockchainIndexer:
                     return False, []
                 
                 # Check for rate limiting
-                if "rate limited" in str(e).lower():
+                if "rate limited" in str(e).lower() or "429" in str(e):
                     delay = delay * 2
                     logger.warning(f"Rate limit encountered. Waiting {delay} seconds before retry...")
                 
@@ -439,7 +698,7 @@ class BlockchainIndexer:
                 logger.error(f"Error getting block {block_number} (attempt {attempt+1}/{max_retries}): {e}")
                 
                 # Check for rate limiting
-                if "rate limited" in str(e).lower():
+                if "rate limited" in str(e).lower() or "429" in str(e):
                     delay = delay * 2
                     logger.warning(f"Rate limit encountered. Waiting {delay} seconds before retry...")
                 
@@ -454,6 +713,7 @@ class BlockchainIndexer:
     
     def process_block_range(self, start_block: int, end_block: int) -> bool:
         """Process a range of blocks, and adjust batch size based on success/failure."""
+        start_time = time.time()
         logger.info(f"Processing blocks {start_block} to {end_block} (batch size: {self.current_batch_size})")
         
         # Try to get logs for the range
@@ -497,6 +757,7 @@ class BlockchainIndexer:
                     logger.warning(f"Could not get timestamp for block {block_num}")
         
         # Process the logs with their timestamps
+        event_count = len(logs)
         self.process_logs(logs, block_timestamps)
         
         # Update the last indexed block
@@ -507,6 +768,12 @@ class BlockchainIndexer:
         if new_batch_size > self.current_batch_size:
             logger.info(f"Increasing batch size from {self.current_batch_size} to {new_batch_size}")
             self.current_batch_size = new_batch_size
+        
+        # Log performance metrics
+        elapsed = time.time() - start_time
+        blocks_processed = end_block - start_block + 1
+        logger.info(f"Processed {blocks_processed} blocks with {event_count} events in {elapsed:.2f} seconds " +
+                    f"({blocks_processed/elapsed:.2f} blocks/sec, {event_count/elapsed:.2f} events/sec)")
         
         return True
     
@@ -560,5 +827,5 @@ class BlockchainIndexer:
                 time.sleep(POLLING_INTERVAL)
 
 if __name__ == "__main__":
-    indexer = BlockchainIndexer(DB_PATH)
+    indexer = FastBlockchainIndexer(DB_PATH)
     indexer.start_indexing()
