@@ -216,6 +216,8 @@ def get_user_stats(address: str) -> Dict[str, Any]:
     result = {
         "address": address,
         "total_points": 0,
+        "toss_points": 0,
+        "winner_points": 0,
         "referral_code": None,
         "referrer_code_used": None,
         "referrals_count": 0,
@@ -233,6 +235,8 @@ def get_user_stats(address: str) -> Dict[str, Any]:
         if points_data:
             points_dict = dict(zip([column[0] for column in cursor.description], points_data))
             result["total_points"] = points_dict["total_points"]
+            result["toss_points"] = points_dict["toss_points"]  # Add this line
+            result["winner_points"] = points_dict["winner_points"]  # Add this line
         
         # Get referral info
         cursor.execute('SELECT * FROM user_referrals WHERE address = ?', (address,))
