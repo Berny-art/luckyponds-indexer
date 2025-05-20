@@ -1,12 +1,42 @@
-version: '3'
+version: '3.8'
 
 services:
-  lucky-ponds-backend:
+  indexer:
     build: .
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./data:/app/data
+    container_name: lucky_ponds_indexer
+    command: python indexer.py
     env_file:
       - .env
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
+    networks:
+      - lucky_ponds_network
+
+  api:
+    build: .
+    container_name: lucky_ponds_api
+    ports:
+      - "${API_PORT:-5000}:5000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - lucky_ponds_network
+
+  setup:
+    build: .
+    container_name: lucky_ponds_setup
+    command: python db_setup.py
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    networks:
+      - lucky_ponds_network
+
+networks:
+  lucky_ponds_network:
+    driver: bridge
