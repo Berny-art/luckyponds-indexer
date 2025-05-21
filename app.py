@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import time
 import logging
 import functools
 from datetime import datetime
@@ -7,30 +7,41 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from typing import Dict, List, Any, Optional
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Import our database access layers and utilities
+from data_access import EventsDatabase, ApplicationDatabase
+from utils import (
+    get_events_db_path, 
+    get_app_db_path, 
+    get_referral_bonus_points,
+    get_current_timestamp,
+    setup_logger
 )
-logger = logging.getLogger(__name__)
+
+# Import the referral system
+from referral_system import ReferralSystem
+
+# Configure logging
+logger = setup_logger('api')
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-DB_PATH = os.getenv("DB_PATH", "./app/data/lucky_ponds.db")
+EVENTS_DB_PATH = get_events_db_path()
+APP_DB_PATH = get_app_db_path()
 API_PORT = int(os.getenv("API_PORT", "5000"))
 API_KEY = os.getenv("API_KEY", "")  # Authentication key for protected endpoints
 REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "false").lower() == "true"  # Whether authentication is required
 
-# Import from referral system
-try:
-    from referral_system import get_user_stats, get_leaderboard, get_or_create_user_referral, apply_referral_code
-except ImportError:
-    logger.error("Referral system import failed. Some features might not be available.")
-
 # Initialize Flask app
 app = Flask(__name__)
+
+# Initialize databases
+events_db = EventsDatabase(EVENTS_DB_PATH)
+app_db = ApplicationDatabase(APP_DB_PATH)
+
+# Initialize referral system
+referral_system = ReferralSystem(APP_DB_PATH)
 
 def require_api_key(f):
     """Decorator to require API key for protected endpoints."""
@@ -49,26 +60,28 @@ def require_api_key(f):
             }), 401
     return decorated
 
-def get_db_connection():
-    """Get a database connection."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # This allows accessing columns by name
-    return conn
-
 @app.route('/health', methods=['GET'])
 def health_check():
     """API health check endpoint."""
     try:
-        # Try to connect to the database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1')
-        cursor.fetchone()
-        conn.close()
+        # Try to connect to both databases
+        events_conn = events_db.get_connection()
+        app_conn = app_db.get_connection()
+        
+        # Execute a simple query on each
+        cursor1 = events_conn.cursor()
+        cursor1.execute('SELECT 1')
+        cursor1.fetchone()
+        events_conn.close()
+        
+        cursor2 = app_conn.cursor()
+        cursor2.execute('SELECT 1')
+        cursor2.fetchone()
+        app_conn.close()
         
         return jsonify({
             "status": "healthy",
-            "message": "API is running and database is accessible",
+            "message": "API is running and databases are accessible",
             "timestamp": datetime.now().isoformat()
         }), 200
     except Exception as e:
@@ -84,31 +97,20 @@ def health_check():
 def indexer_status():
     """Check the status of the blockchain indexer."""
     try:
-        conn = get_db_connection()
+        # Get the last indexed block from events database
+        last_block = events_db.get_last_indexed_block()
+        
+        # Get event counts from events database
+        conn = events_db.get_connection()
         cursor = conn.cursor()
         
-        # Get the last indexed block
-        cursor.execute('SELECT last_block FROM indexer_state WHERE id = 1')
-        indexer_state = cursor.fetchone()
-        
-        if not indexer_state:
-            return jsonify({
-                "status": "not_initialized",
-                "message": "Indexer has not been initialized yet",
-                "timestamp": datetime.now().isoformat()
-            }), 404
-        
-        last_block = indexer_state['last_block']
-        
-        # Get the count of various events
+        # Get toss count
         cursor.execute('SELECT COUNT(*) FROM coin_tossed_events')
         toss_count = cursor.fetchone()[0]
         
+        # Get winner count
         cursor.execute('SELECT COUNT(*) FROM lucky_winner_selected_events')
         winner_count = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM user_points')
-        user_count = cursor.fetchone()[0]
         
         # Get the most recent event timestamp
         cursor.execute('''
@@ -121,9 +123,22 @@ def indexer_status():
         ''')
         last_event_timestamp = cursor.fetchone()[0]
         
-        last_event_time = datetime.fromtimestamp(last_event_timestamp) if last_event_timestamp else None
+        # Get user count from application database
+        app_conn = app_db.get_connection()
+        app_cursor = app_conn.cursor()
+        app_cursor.execute('SELECT COUNT(*) FROM user_points')
+        user_count = app_cursor.fetchone()[0]
         
+        # Get calculator state from application database
+        app_cursor.execute('SELECT * FROM calculator_state WHERE id = 1')
+        calculator_state = app_cursor.fetchone()
+        
+        # Close connections
         conn.close()
+        app_conn.close()
+        
+        # Format results
+        last_event_time = datetime.fromtimestamp(last_event_timestamp) if last_event_timestamp else None
         
         return jsonify({
             "status": "active",
@@ -133,6 +148,11 @@ def indexer_status():
             "total_users": user_count,
             "last_event_timestamp": last_event_timestamp,
             "last_event_time": last_event_time.isoformat() if last_event_time else None,
+            "calculator_state": {
+                "last_processed_toss_id": calculator_state['last_processed_toss_id'] if calculator_state else 0,
+                "last_processed_winner_id": calculator_state['last_processed_winner_id'] if calculator_state else 0,
+                "last_run_timestamp": calculator_state['last_run_timestamp'] if calculator_state else 0
+            },
             "current_time": datetime.now().isoformat()
         }), 200
         
@@ -150,61 +170,44 @@ def get_global_leaderboard():
     """
     Get the global leaderboard with sorting options.
     Query parameters:
-    - sort_by: field to sort by (points, value, wins)
+    - sort_by: field to sort by (points, toss_points, winner_points, referral_points)
     - order: asc or desc
     - limit: number of results (default 50)
     - offset: pagination offset (default 0)
     """
     try:
-        sort_by = request.args.get('sort_by', 'points')
+        sort_by = request.args.get('sort_by', 'total_points')
         order = request.args.get('order', 'desc').upper()
         limit = min(int(request.args.get('limit', 50)), 100)  # Max 100 results
         offset = int(request.args.get('offset', 0))
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         # Map sort_by parameter to actual column names
         sort_columns = {
-            'points': 'up.total_points',
-            'value': 'total_value',
-            'wins': 'win_count'
+            'total_points': 'up.total_points',
+            'toss_points': 'up.toss_points',
+            'winner_points': 'up.winner_points',
+            'referral_points': 'up.referral_points'
         }
         
         sort_column = sort_columns.get(sort_by, 'up.total_points')
         sort_order = "DESC" if order == "DESC" else "ASC"
         
-        # Build the query based on the sorting requirements
+        # Get connection to application database
+        conn = app_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Build query for leaderboard
         query = f'''
-        WITH user_values AS (
-            SELECT 
-                frog_address as address,
-                SUM(CAST(amount as DECIMAL)) as total_value
-            FROM coin_tossed_events
-            GROUP BY frog_address
-        ),
-        user_wins AS (
-            SELECT 
-                winner_address as address,
-                COUNT(*) as win_count
-            FROM lucky_winner_selected_events
-            GROUP BY winner_address
-        ),
-        user_referrals AS (
-            SELECT 
-                address,
-                referral_points_earned
-            FROM user_referrals
-        )
         SELECT 
             up.address,
             up.total_points,
-            COALESCE(uv.total_value, 0) as total_value,
-            COALESCE(uw.win_count, 0) as win_count,
-            COALESCE(ur.referral_points_earned, 0) as referral_points
+            up.toss_points,
+            up.winner_points,
+            up.referral_points,
+            ur.referral_code,
+            (SELECT COUNT(*) FROM user_referrals WHERE referrer_address = up.address) as referrals_count,
+            (SELECT COUNT(*) FROM user_referrals WHERE referrer_address = up.address AND is_activated = 1) as activated_referrals
         FROM user_points up
-        LEFT JOIN user_values uv ON up.address = uv.address
-        LEFT JOIN user_wins uw ON up.address = uw.address
         LEFT JOIN user_referrals ur ON up.address = ur.address
         ORDER BY {sort_column} {sort_order}
         LIMIT ? OFFSET ?
@@ -217,18 +220,50 @@ def get_global_leaderboard():
         cursor.execute('SELECT COUNT(*) FROM user_points')
         total_users = cursor.fetchone()[0]
         
-        # Convert to list of dictionaries
+        # Connect to events database to get toss and win data
+        events_conn = events_db.get_connection()
+        events_cursor = events_conn.cursor()
+        
+        # Convert to list of dictionaries with full user stats
         result = []
         for user in users:
-            result.append({
-                "address": user['address'],
+            address = user['address']
+            
+            # Get toss data
+            events_cursor.execute('''
+            SELECT COUNT(*) as toss_count, SUM(CAST(amount as DECIMAL)) as total_value
+            FROM coin_tossed_events
+            WHERE frog_address = ?
+            ''', (address,))
+            toss_data = events_cursor.fetchone()
+            
+            # Get win data
+            events_cursor.execute('''
+            SELECT COUNT(*) as win_count
+            FROM lucky_winner_selected_events
+            WHERE winner_address = ?
+            ''', (address,))
+            win_data = events_cursor.fetchone()
+            
+            # Build user stats
+            user_stats = {
+                "address": address,
                 "total_points": user['total_points'],
-                "total_value_spent": str(user['total_value']),
-                "total_wins": user['win_count'],
-                "referral_points": user['referral_points']
-            })
+                "toss_points": user['toss_points'],
+                "winner_points": user['winner_points'],
+                "referral_points": user['referral_points'],
+                "referral_code": user['referral_code'],
+                "referrals_count": user['referrals_count'],
+                "referrals_activated": user['activated_referrals'],
+                "total_tosses": toss_data['toss_count'] if toss_data else 0,
+                "total_value_spent": str(toss_data['total_value'] or 0) if toss_data else "0",
+                "total_wins": win_data['win_count'] if win_data else 0
+            }
+            result.append(user_stats)
         
+        # Close connections
         conn.close()
+        events_conn.close()
         
         return jsonify({
             "leaderboard": result,
@@ -255,15 +290,97 @@ def get_user_data(address):
         # Normalize address
         address = address.lower()
         
-        # Use the imported function from referral_system
-        user_data = get_user_stats(address)
+        # Get application database connection
+        app_conn = app_db.get_connection()
+        app_cursor = app_conn.cursor()
         
-        # If the user doesn't exist, we'll still return the default structure
-        # from get_user_stats but with a 404 status
-        if user_data["total_tosses"] == 0 and user_data["total_wins"] == 0 and user_data["total_points"] == 0:
-            return jsonify(user_data), 404
+        # Initialize result structure
+        result = {
+            "address": address,
+            "total_points": 0,
+            "toss_points": 0,
+            "winner_points": 0,
+            "referral_points": 0,
+            "referral_code": None,
+            "referrer_code_used": None,
+            "referrals_count": 0,
+            "referrals_activated": 0,
+            "total_tosses": 0,
+            "total_value_spent": "0",
+            "total_wins": 0
+        }
         
-        return jsonify(user_data), 200
+        # Get points info
+        app_cursor.execute('SELECT * FROM user_points WHERE address = ?', (address,))
+        points_data = app_cursor.fetchone()
+        if points_data:
+            result["total_points"] = points_data["total_points"]
+            result["toss_points"] = points_data["toss_points"]
+            result["winner_points"] = points_data["winner_points"]
+            result["referral_points"] = points_data["referral_points"]
+        
+        # Get referral info
+        app_cursor.execute('SELECT * FROM user_referrals WHERE address = ?', (address,))
+        referral_data = app_cursor.fetchone()
+        if referral_data:
+            result["referral_code"] = referral_data["referral_code"]
+            
+            # If this user has a referrer, get that referrer's code
+            if referral_data["referrer_address"]:
+                app_cursor.execute('SELECT referral_code FROM user_referrals WHERE address = ?', 
+                               (referral_data["referrer_address"],))
+                referrer_code = app_cursor.fetchone()
+                if referrer_code:
+                    result["referrer_code_used"] = referrer_code["referral_code"]
+        
+        # Count referrals (total and activated)
+        app_cursor.execute('''
+        SELECT COUNT(*), SUM(is_activated) 
+        FROM user_referrals 
+        WHERE referrer_address = ?
+        ''', (address,))
+        
+        referral_counts = app_cursor.fetchone()
+        if referral_counts and referral_counts[0]:
+            result["referrals_count"] = referral_counts[0]
+            result["referrals_activated"] = referral_counts[1] or 0
+        
+        # Get events database connection for toss and win data
+        events_conn = events_db.get_connection()
+        events_cursor = events_conn.cursor()
+        
+        # Get toss info
+        events_cursor.execute('''
+        SELECT COUNT(*), COALESCE(SUM(CAST(amount as DECIMAL)), 0) 
+        FROM coin_tossed_events 
+        WHERE frog_address = ?
+        ''', (address,))
+        
+        toss_data = events_cursor.fetchone()
+        if toss_data:
+            result["total_tosses"] = toss_data[0]
+            result["total_value_spent"] = str(toss_data[1])
+        
+        # Get win info
+        events_cursor.execute('''
+        SELECT COUNT(*) 
+        FROM lucky_winner_selected_events 
+        WHERE winner_address = ?
+        ''', (address,))
+        
+        win_count = events_cursor.fetchone()
+        if win_count:
+            result["total_wins"] = win_count[0]
+        
+        # Close connections
+        app_conn.close()
+        events_conn.close()
+        
+        # Check if the user exists (has any activity)
+        if result["total_tosses"] == 0 and result["total_wins"] == 0 and not points_data and not referral_data:
+            return jsonify(result), 404
+        
+        return jsonify(result), 200
         
     except Exception as e:
         logger.error(f"Error getting user data: {e}")
@@ -288,9 +405,11 @@ def get_recent_winners():
         offset = int(request.args.get('offset', 0))
         pond_type = request.args.get('pond_type')
         
-        conn = get_db_connection()
+        # Get events database connection
+        conn = events_db.get_connection()
         cursor = conn.cursor()
         
+        # Build query
         query = '''
         SELECT 
             lw.tx_hash,
@@ -368,16 +487,16 @@ def get_referral_code(address):
         # Normalize address
         address = address.lower()
         
-        # Use the imported function
-        user_referral = get_or_create_user_referral(address)
+        # Use the referral system to get or create the code
+        user_referral = referral_system.get_or_create_user_referral(address)
         
         # Check if this user already has a referrer
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        app_conn = app_db.get_connection()
+        cursor = app_conn.cursor()
         cursor.execute('SELECT referrer_address FROM user_referrals WHERE address = ?', (address,))
         result = cursor.fetchone()
         has_referrer = result and result['referrer_address'] is not None
-        conn.close()
+        app_conn.close()
         
         return jsonify({
             "address": address,
@@ -412,22 +531,8 @@ def apply_referral():
         address = data['address'].lower()
         referral_code = data['referral_code'].upper()
         
-        # First check if the user already has a referrer
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT referrer_address FROM user_referrals WHERE address = ?', (address,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result and result['referrer_address']:
-            return jsonify({
-                "status": "error",
-                "message": "Cannot change referrer: this account already has a referrer code applied",
-                "locked": True
-            }), 403  # Forbidden - explicitly show this is not allowed
-        
-        # If no existing referrer, use the imported function to apply the code
-        success, message = apply_referral_code(address, referral_code)
+        # Use the referral system to apply the code
+        success, message = referral_system.apply_referral_code(address, referral_code)
         
         if success:
             return jsonify({
@@ -447,7 +552,146 @@ def apply_referral():
             "message": str(e),
             "timestamp": datetime.now().isoformat()
         }), 500
-    
+
+@app.route('/events/tosses/<address>', methods=['GET'])
+@require_api_key
+def get_user_tosses(address):
+    """
+    Get list of coin toss events for a specific user.
+    Query parameters:
+    - limit: number of results (default 20)
+    - offset: pagination offset (default 0)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
+        offset = int(request.args.get('offset', 0))
+        address = address.lower()
+        
+        # Get events database connection
+        conn = events_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Get toss events
+        cursor.execute('''
+        SELECT 
+            id, tx_hash, block_number, block_timestamp, pond_type, 
+            amount, timestamp, total_pond_tosses, total_pond_value
+        FROM coin_tossed_events 
+        WHERE frog_address = ?
+        ORDER BY block_timestamp DESC
+        LIMIT ? OFFSET ?
+        ''', (address, limit, offset))
+        
+        tosses = cursor.fetchall()
+        
+        # Count total tosses for pagination
+        cursor.execute('SELECT COUNT(*) FROM coin_tossed_events WHERE frog_address = ?', (address,))
+        total_tosses = cursor.fetchone()[0]
+        
+        # Convert to list of dictionaries
+        result = []
+        for toss in tosses:
+            # Format timestamp as ISO date
+            timestamp = datetime.fromtimestamp(toss['block_timestamp']).isoformat()
+            
+            result.append({
+                "id": toss['id'],
+                "tx_hash": toss['tx_hash'],
+                "block_number": toss['block_number'],
+                "timestamp": timestamp,
+                "pond_type": toss['pond_type'],
+                "amount": toss['amount'],
+                "total_pond_tosses": toss['total_pond_tosses'],
+                "total_pond_value": toss['total_pond_value']
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            "address": address,
+            "tosses": result,
+            "total_tosses": total_tosses,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting user tosses: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/events/wins/<address>', methods=['GET'])
+@require_api_key
+def get_user_wins(address):
+    """
+    Get list of winner events for a specific user.
+    Query parameters:
+    - limit: number of results (default 20)
+    - offset: pagination offset (default 0)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
+        offset = int(request.args.get('offset', 0))
+        address = address.lower()
+        
+        # Get events database connection
+        conn = events_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Get win events
+        cursor.execute('''
+        SELECT 
+            id, tx_hash, block_number, block_timestamp, pond_type, 
+            prize, selector
+        FROM lucky_winner_selected_events 
+        WHERE winner_address = ?
+        ORDER BY block_timestamp DESC
+        LIMIT ? OFFSET ?
+        ''', (address, limit, offset))
+        
+        wins = cursor.fetchall()
+        
+        # Count total wins for pagination
+        cursor.execute('SELECT COUNT(*) FROM lucky_winner_selected_events WHERE winner_address = ?', (address,))
+        total_wins = cursor.fetchone()[0]
+        
+        # Convert to list of dictionaries
+        result = []
+        for win in wins:
+            # Format timestamp as ISO date
+            timestamp = datetime.fromtimestamp(win['block_timestamp']).isoformat()
+            
+            result.append({
+                "id": win['id'],
+                "tx_hash": win['tx_hash'],
+                "block_number": win['block_number'],
+                "timestamp": timestamp,
+                "pond_type": win['pond_type'],
+                "prize": win['prize'],
+                "selector": win['selector']
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            "address": address,
+            "wins": result,
+            "total_wins": total_wins,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting user wins: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 @app.route('/', methods=['GET'])
 def api_documentation():
     """API documentation endpoint."""
@@ -457,7 +701,7 @@ def api_documentation():
     
     return jsonify({
         "name": "Lucky Ponds API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "authentication": auth_status,
         "endpoints": {
             "/": {
@@ -480,7 +724,7 @@ def api_documentation():
                 "description": "Get the global leaderboard with sorting options",
                 "authentication": auth_status,
                 "parameters": {
-                    "sort_by": "Field to sort by (points, value, wins)",
+                    "sort_by": "Field to sort by (total_points, toss_points, winner_points, referral_points)",
                     "order": "Sort order (asc, desc)",
                     "limit": "Number of results to return",
                     "offset": "Pagination offset"
@@ -514,6 +758,24 @@ def api_documentation():
                     "address": "User address",
                     "referral_code": "Referral code to apply"
                 }
+            },
+            "/events/tosses/<address>": {
+                "methods": ["GET"],
+                "description": "Get list of coin toss events for a specific user",
+                "authentication": auth_status,
+                "parameters": {
+                    "limit": "Number of results to return",
+                    "offset": "Pagination offset"
+                }
+            },
+            "/events/wins/<address>": {
+                "methods": ["GET"],
+                "description": "Get list of winner events for a specific user",
+                "authentication": auth_status,
+                "parameters": {
+                    "limit": "Number of results to return",
+                    "offset": "Pagination offset"
+                }
             }
         },
         "authentication_info": {
@@ -527,7 +789,7 @@ def api_documentation():
 @app.after_request
 def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-API-Key')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE')
     return response
 

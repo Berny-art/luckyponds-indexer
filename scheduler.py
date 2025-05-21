@@ -6,28 +6,34 @@ import schedule
 import argparse
 from typing import Dict, Any
 from dotenv import load_dotenv
+
+# Import our database access layers and components
+from data_access import EventsDatabase, ApplicationDatabase
 from points_calculator import PointsCalculator
+from utils import (
+    get_events_db_path, 
+    get_app_db_path, 
+    get_points_calculation_interval,
+    setup_logger
+)
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger('scheduler')
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-DB_PATH = os.getenv("DB_PATH", "./data/lucky_ponds.db")
-POINTS_CALCULATION_INTERVAL = int(os.getenv("POINTS_CALCULATION_INTERVAL", "3600"))  # Default: every hour
+EVENTS_DB_PATH = get_events_db_path()
+APP_DB_PATH = get_app_db_path()
+POINTS_CALCULATION_INTERVAL = get_points_calculation_interval()
 
 def run_points_calculation():
     """Execute the points calculation process."""
     logger.info("Starting scheduled points calculation")
     
     try:
-        calculator = PointsCalculator(DB_PATH)
+        calculator = PointsCalculator(APP_DB_PATH, EVENTS_DB_PATH)
         events_processed = calculator.run_points_calculation()
         
         logger.info(f"Scheduled points calculation completed: {events_processed} events processed")

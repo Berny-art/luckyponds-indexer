@@ -26,6 +26,8 @@ services:
     restart: unless-stopped
     networks:
       - lucky_ponds_network
+    depends_on:
+      - indexer
 
   # API Server
   api:
@@ -41,6 +43,9 @@ services:
     restart: unless-stopped
     networks:
       - lucky_ponds_network
+    depends_on:
+      - indexer
+      - calculator
 
   # One-time Database Setup
   setup:
