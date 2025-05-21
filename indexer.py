@@ -62,7 +62,7 @@ class FastBlockchainIndexer:
         self.last_indexed_block = self.db.get_last_indexed_block() or START_BLOCK
         self.current_batch_size = INITIAL_BATCH_SIZE
         self.min_batch_size = 10
-        self.max_batch_size = 500
+        self.max_batch_size = 300
         self.backoff_factor = 0.5  # How much to reduce batch size on failure
         self.success_factor = 1.2  # How much to increase batch size on success (20%)
     
@@ -104,6 +104,7 @@ class FastBlockchainIndexer:
         for attempt in range(max_retries):
             try:
                 block = w3.eth.get_block(block_number)
+                time.sleep(0.5)  # Small delay to avoid hammering the RPC
                 return True, block
             except Exception as e:
                 delay = 2 ** attempt
