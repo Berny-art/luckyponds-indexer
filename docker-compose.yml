@@ -22,8 +22,24 @@ services:
       - TZ=UTC
     command: |
       sh -c "
-        # Points calculation every hour at 30 minutes past the hour
-        echo '30 * * * * /usr/local/bin/python /app/points_calculator.py >> /app/data/calculator.log 2>&1' | crontab - &&
+        cat > /tmp/calculator_cron << 'EOF'
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        SHELL=/bin/bash
+        EVENTS_DB_PATH=/app/data/events.db
+        APP_DB_PATH=/app/data/application.db
+        TOSS_POINTS_MULTIPLIER=${TOSS_POINTS_MULTIPLIER:-10}
+        WIN_POINTS=${WIN_POINTS:-100}
+        REFERRAL_BONUS_POINTS=${REFERRAL_BONUS_POINTS:-20}
+        
+        # Points calculation - configurable interval (default every hour at :30)
+        30 * * * * cd /app && python points_calculator.py >> /app/data/calculator.log 2>&1
+        
+        # Health check every 6 hours
+        0 */6 * * * echo \"\$(date): Health check - Points calculator active\" >> /app/data/calculator.log 2>&1
+      EOF
+        crontab /tmp/calculator_cron &&
+        echo 'Crontab installed:' &&
+        crontab -l &&
         cron -f
       "
     env_file:
@@ -44,24 +60,38 @@ services:
       - TZ=UTC
     command: |
       sh -c "
-        # Create crontab with precise timing for each pond type
         cat > /tmp/keeper_cron << 'EOF'
-        # 5-minute ponds: 30 seconds after timelock expires
-        0,5,10,15,20,25,30,35,40,45,50,55 * * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        SHELL=/bin/bash
+        EVENTS_DB_PATH=/app/data/events.db
+        APP_DB_PATH=/app/data/application.db
+        RPC_URL=${RPC_URL}
+        CONTRACT_ADDRESS=${CONTRACT_ADDRESS}
+        PRIVATE_KEY=${PRIVATE_KEY}
+        GAS_LIMIT=${GAS_LIMIT:-300000}
+        GAS_PRICE_GWEI=${GAS_PRICE_GWEI:-20}
         
-        # Hourly ponds: 90 seconds after each hour
-        1 * * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        # 5-minute ponds: 30 seconds after each 5-minute interval (21s timelock + buffer)
+        0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
         
-        # Daily ponds: 90 seconds after midnight UTC
-        1 0 * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        # Hourly ponds: 90 seconds after each hour (61s timelock + buffer)
+        1 * * * * cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1
         
-        # Weekly ponds: 90 seconds after Saturday midnight UTC
-        1 0 * * 6 /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        # Daily ponds: 90 seconds after midnight UTC (61s timelock + buffer)
+        1 0 * * * cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1
         
-        # Monthly ponds: 90 seconds after first day of month
-        1 0 1 * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        # Weekly ponds: 90 seconds after Saturday midnight UTC (61s timelock + buffer)
+        1 0 * * 6 cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Monthly ponds: 90 seconds after first day of month midnight UTC (61s timelock + buffer)
+        1 0 1 * * cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Health check every hour at :02
+        2 * * * * echo \"\$(date): Health check - Winner selector active\" >> /app/data/keeper.log 2>&1
       EOF
         crontab /tmp/keeper_cron &&
+        echo 'Crontab installed:' &&
+        crontab -l &&
         cron -f
       "
     env_file:
@@ -89,7 +119,7 @@ services:
     depends_on:
       - indexer
 
-  # Database Setup
+  # Database Setup (run once)
   setup:
     build: .
     container_name: lucky_ponds_setup
