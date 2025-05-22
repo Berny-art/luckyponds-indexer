@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Fast Blockchain Indexer (Runs Continuously)
+  # Blockchain Indexer
   indexer:
     build: .
     container_name: lucky_ponds_indexer
@@ -14,11 +14,18 @@ services:
     networks:
       - lucky_ponds_network
 
-  # Enhanced Scheduler (Points Calculator + Winner Selection + Health Checks)
-  scheduler:
+  # Points Calculator (cron-based)
+  calculator:
     build: .
-    container_name: lucky_ponds_scheduler
-    command: python scheduler.py --points-interval ${POINTS_CALCULATION_INTERVAL:-3600} --winner-interval ${WINNER_SELECTION_INTERVAL:-300}
+    container_name: lucky_ponds_calculator
+    environment:
+      - TZ=UTC
+    command: |
+      sh -c "
+        # Points calculation every hour at 30 minutes past the hour
+        echo '30 * * * * /usr/local/bin/python /app/points_calculator.py >> /app/data/calculator.log 2>&1' | crontab - &&
+        cron -f
+      "
     env_file:
       - .env
     volumes:
@@ -28,6 +35,42 @@ services:
       - lucky_ponds_network
     depends_on:
       - indexer
+
+  # Winner Selector (cron-based, UTC timezone)
+  keeper:
+    build: .
+    container_name: lucky_ponds_keeper
+    environment:
+      - TZ=UTC
+    command: |
+      sh -c "
+        # Create crontab with precise timing for each pond type
+        cat > /tmp/keeper_cron << 'EOF'
+        # 5-minute ponds: 30 seconds after timelock expires
+        0,5,10,15,20,25,30,35,40,45,50,55 * * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Hourly ponds: 90 seconds after each hour
+        1 * * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Daily ponds: 90 seconds after midnight UTC
+        1 0 * * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Weekly ponds: 90 seconds after Saturday midnight UTC
+        1 0 * * 6 /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+        
+        # Monthly ponds: 90 seconds after first day of month
+        1 0 1 * * /usr/local/bin/python /app/winner_selector.py >> /app/data/keeper.log 2>&1
+      EOF
+        crontab /tmp/keeper_cron &&
+        cron -f
+      "
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - lucky_ponds_network
 
   # API Server
   api:
@@ -45,9 +88,8 @@ services:
       - lucky_ponds_network
     depends_on:
       - indexer
-      - scheduler
 
-  # One-time Database Setup
+  # Database Setup
   setup:
     build: .
     container_name: lucky_ponds_setup
