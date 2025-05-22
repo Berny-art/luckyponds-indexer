@@ -14,34 +14,13 @@ services:
     networks:
       - lucky_ponds_network
 
-  # Points Calculator (cron-based)
-  calculator:
+  # Unified Scheduler (Points + Winner Selection)
+  scheduler:
     build: .
-    container_name: lucky_ponds_calculator
+    container_name: lucky_ponds_scheduler
     environment:
       - TZ=UTC
-    command: |
-      sh -c "
-        # Create crontab with hardcoded environment (avoids interpolation issues)
-        cat > /tmp/calculator_cron << 'CRONEOF'
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        SHELL=/bin/bash
-        EVENTS_DB_PATH=/app/data/events.db
-        APP_DB_PATH=/app/data/application.db
-        TOSS_POINTS_MULTIPLIER=10
-        WIN_POINTS=100
-        REFERRAL_BONUS_POINTS=20
-        
-        # Points calculation every hour at :30
-        30 * * * * cd /app && python points_calculator.py >> /app/data/calculator.log 2>&1
-        
-        # Health check every 6 hours  
-        0 */6 * * * echo \"$$(date): Health check - Points calculator active\" >> /app/data/calculator.log 2>&1
-      CRONEOF
-        crontab /tmp/calculator_cron &&
-        echo 'Calculator crontab installed' &&
-        cron -f
-      "
+    command: python scheduler.py --use-utc-timing
     env_file:
       - .env
     volumes:
@@ -51,60 +30,6 @@ services:
       - lucky_ponds_network
     depends_on:
       - indexer
-
-  # Winner Selector (cron-based)
-  keeper:
-    build: .
-    container_name: lucky_ponds_keeper
-    environment:
-      - TZ=UTC
-    command: |
-      sh -c "
-        # Read env vars and create crontab
-        CONTRACT_ADDR=$$(grep '^CONTRACT_ADDRESS=' .env | cut -d'=' -f2)
-        PRIV_KEY=$$(grep '^PRIVATE_KEY=' .env | cut -d'=' -f2)
-        RPC_URL_VAL=$$(grep '^RPC_URL=' .env | cut -d'=' -f2)
-        
-        cat > /tmp/keeper_cron << CRONEOF
-        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        SHELL=/bin/bash
-        EVENTS_DB_PATH=/app/data/events.db
-        APP_DB_PATH=/app/data/application.db
-        RPC_URL=$$RPC_URL_VAL
-        CONTRACT_ADDRESS=$$CONTRACT_ADDR
-        PRIVATE_KEY=$$PRIV_KEY
-        GAS_LIMIT=300000
-        GAS_PRICE_GWEI=20
-        
-        # 5-minute ponds
-        0,5,10,15,20,25,30,35,40,45,50,55 * * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
-        
-        # Hourly ponds
-        1 * * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
-        
-        # Daily ponds
-        1 0 * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
-        
-        # Weekly ponds (Saturday)
-        1 0 * * 6 cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
-        
-        # Monthly ponds
-        1 0 1 * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1
-        
-        # Health check
-        2 * * * * echo \"$$(date): Health check - Winner selector active\" >> /app/data/keeper.log 2>&1
-      CRONEOF
-        crontab /tmp/keeper_cron &&
-        echo 'Keeper crontab installed' &&
-        cron -f
-      "
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-    networks:
-      - lucky_ponds_network
 
   # API Server
   api:
