@@ -29,6 +29,23 @@ services:
     depends_on:
       - indexer
 
+  # Winner Selector (Keeper - Runs every 5 minutes)
+  keeper:
+    build: .
+    container_name: lucky_ponds_keeper
+    command: |
+      sh -c "
+        echo '*/5 * * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1' | crontab - &&
+        cron -f
+      "
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - lucky_ponds_network
+
   # API Server
   api:
     build: .
