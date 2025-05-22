@@ -9,9 +9,8 @@ The system consists of several interconnected components:
 1. **Event Indexer** (`indexer.py`) - Monitors blockchain for contract events
 2. **Points Calculator** (`points_calculator.py`) - Processes events and awards points
 3. **API Server** (`app.py`) - REST API for accessing data
-4. **Scheduler** (`scheduler.py`) - Automated periodic tasks
-5. **Winner Selector** (`winner_selector.py`) - Automated winner selection keeper
-6. **Database Layer** - SQLite databases for events and application data
+4. **Winner Selector** (`winner_selector.py`) - Automated winner selection keeper
+5. **Database Layer** - SQLite databases for events and application data
 
 ## 📋 Prerequisites
 
@@ -81,13 +80,13 @@ The system consists of several interconnected components:
    # Terminal 1: Event indexer
    python indexer.py
    
-   # Terminal 2: Points calculator (scheduled)
-   python scheduler.py
+   # Terminal 2: Points calculator (crontab)
+   python points_calculator.py
    
    # Terminal 3: API server
    python app.py
    
-   # Terminal 4: Winner keeper (optional)
+   # Terminal 4: Winner keeper (crontab)
    python winner_selector.py
    ```
 
