@@ -195,13 +195,13 @@ def main():
             schedule.every().minute.at(":21").do(lambda: run_winner_selection() if datetime.now().minute % 5 == 0 else None)
             
             # Hourly ponds: 1 minute 30 seconds after each hour (61s timelock + 29s buffer)  
-            schedule.every().hour.at("01:30").do(run_winner_selection)
+            schedule.every().hour.at("01:05").do(run_winner_selection)
             
             # Daily ponds: 1 minute 30 seconds after midnight UTC
-            schedule.every().day.at("00:01:30").do(run_winner_selection)
+            schedule.every().day.at("00:01:05").do(run_winner_selection)
             
             # Weekly ponds: 1 minute 30 seconds after Saturday midnight UTC
-            schedule.every().saturday.at("00:01:30").do(run_winner_selection)
+            schedule.every().saturday.at("00:01:05").do(run_winner_selection)
             
             # Monthly ponds: 1 minute 30 seconds after first day of month
             schedule.every().day.at("00:01:30").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
