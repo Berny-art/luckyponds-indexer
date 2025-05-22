@@ -62,7 +62,7 @@ class FastBlockchainIndexer:
         self.last_indexed_block = self.db.get_last_indexed_block() or START_BLOCK
         self.current_batch_size = INITIAL_BATCH_SIZE
         self.min_batch_size = 10
-        self.max_batch_size = 300
+        self.max_batch_size = 400
         self.backoff_factor = 0.5  # How much to reduce batch size on failure
         self.success_factor = 1.2  # How much to increase batch size on success (20%)
     

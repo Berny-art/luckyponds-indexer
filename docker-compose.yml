@@ -35,7 +35,7 @@ services:
     container_name: lucky_ponds_keeper
     command: |
       sh -c "
-        echo '*/5 * * * * cd /app && python winner_selector.py >> /app/data/keeper.log 2>&1' | crontab - &&
+        echo '*/5 * * * * cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1' | crontab - &&
         cron -f
       "
     env_file:
