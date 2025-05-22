@@ -14,11 +14,11 @@ services:
     networks:
       - lucky_ponds_network
 
-  # Points Calculator (Runs on Schedule)
-  calculator:
+  # Enhanced Scheduler (Points Calculator + Winner Selection + Health Checks)
+  scheduler:
     build: .
-    container_name: lucky_ponds_calculator
-    command: python scheduler.py --interval ${POINTS_CALCULATION_INTERVAL:-3600}
+    container_name: lucky_ponds_scheduler
+    command: python scheduler.py --points-interval ${POINTS_CALCULATION_INTERVAL:-3600} --winner-interval ${WINNER_SELECTION_INTERVAL:-300}
     env_file:
       - .env
     volumes:
@@ -28,23 +28,6 @@ services:
       - lucky_ponds_network
     depends_on:
       - indexer
-
-  # Winner Selector (Keeper - Runs every 5 minutes)
-  keeper:
-    build: .
-    container_name: lucky_ponds_keeper
-    command: |
-      sh -c "
-        echo '*/5 * * * * cd /app && /usr/local/bin/python winner_selector.py >> /app/data/keeper.log 2>&1' | crontab - &&
-        cron -f
-      "
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-    networks:
-      - lucky_ponds_network
 
   # API Server
   api:
@@ -62,7 +45,7 @@ services:
       - lucky_ponds_network
     depends_on:
       - indexer
-      - calculator
+      - scheduler
 
   # One-time Database Setup
   setup:
