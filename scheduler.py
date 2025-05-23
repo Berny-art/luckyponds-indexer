@@ -192,7 +192,7 @@ def main():
         if winner_enabled:
             # 5-minute ponds: 21 seconds after each 5-minute interval
             # Run at :21 seconds of every minute, but only when minute % 5 == 0
-            schedule.every().minute.at(":21").do(lambda: run_winner_selection() if datetime.now().minute % 5 == 0 else None)
+            # schedule.every().minute.at(":21").do(lambda: run_winner_selection() if datetime.now().minute % 5 == 0 else None)
             
             # Hourly ponds: 1 minute 30 seconds after each hour (61s timelock + 29s buffer)  
             schedule.every().hour.at("01:05").do(run_winner_selection)
