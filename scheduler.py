@@ -28,9 +28,9 @@ load_dotenv()
 # Configuration
 EVENTS_DB_PATH = get_events_db_path()
 APP_DB_PATH = get_app_db_path()
-POINTS_INTERVAL = int(os.getenv("POINTS_CALCULATION_INTERVAL", "3600"))  # 1 hour
+POINTS_INTERVAL = int(os.getenv("POINTS_CALCULATION_INTERVAL", "900"))  # 15 minutes
 WINNER_INTERVAL = int(os.getenv("WINNER_SELECTION_INTERVAL", "300"))     # 5 minutes
-REFERRAL_INTERVAL = int(os.getenv("REFERRAL_PROCESSING_INTERVAL", "300"))  # 5 minutes
+REFERRAL_INTERVAL = int(os.getenv("REFERRAL_PROCESSING_INTERVAL", "1800"))  # 30 minutes
 
 # Winner selection configuration
 RPC_URL = os.getenv("RPC_URL")
@@ -214,7 +214,7 @@ def main():
         logger.info("Starting UTC-based scheduler:")
         
         # Points calculation: every hour at 30 minutes past
-        schedule.every().hour.at(":30").do(run_points_calculation)
+        schedule.every(15).minutes.do(run_points_calculation)
 
         # Referral processing: every 10 minutes at 5 seconds past
         schedule.every(5).minutes.do(run_referral_processing)
