@@ -30,6 +30,7 @@ EVENTS_DB_PATH = get_events_db_path()
 APP_DB_PATH = get_app_db_path()
 POINTS_INTERVAL = int(os.getenv("POINTS_CALCULATION_INTERVAL", "3600"))  # 1 hour
 WINNER_INTERVAL = int(os.getenv("WINNER_SELECTION_INTERVAL", "300"))     # 5 minutes
+REFERRAL_INTERVAL = int(os.getenv("REFERRAL_PROCESSING_INTERVAL", "300"))  # 5 minutes
 
 # Winner selection configuration
 RPC_URL = os.getenv("RPC_URL")
@@ -156,6 +157,8 @@ def main():
                        help=f"Points calculation interval in seconds (default: {POINTS_INTERVAL})")
     parser.add_argument("--winner-interval", type=int, default=WINNER_INTERVAL,
                        help=f"Winner selection interval in seconds (default: {WINNER_INTERVAL})")
+    parser.add_argument("--referral-interval", type=int, default=REFERRAL_INTERVAL,
+                       help=f"Referral processing interval in seconds (default: {REFERRAL_INTERVAL})")
     parser.add_argument("--disable-winner-selection", action="store_true",
                        help="Disable winner selection")
     parser.add_argument("--disable-referral-processing", action="store_true",
@@ -171,12 +174,16 @@ def main():
     parser.add_argument("--referrals-only", action="store_true",
                        help="Run only referral processing once")
     
+    
     args = parser.parse_args()
     
     # Handle one-time runs
     if args.run_once:
         logger.info("Running all tasks once")
         run_points_calculation()
+        if not args.disable_referral_processing:
+            time.sleep(1)
+            run_referral_processing()
         if not args.disable_winner_selection and initialize_web3():
             time.sleep(2)
             run_winner_selection()
@@ -191,6 +198,11 @@ def main():
         logger.info("Running winner selection once")
         if initialize_web3():
             run_winner_selection()
+        return
+    
+    if args.referrals_only:
+        logger.info("Running referral processing once")
+        run_referral_processing()
         return
     
     # Initialize winner selection if enabled
@@ -230,6 +242,8 @@ def main():
         
         # Traditional interval-based scheduling
         schedule.every(args.points_interval).seconds.do(run_points_calculation)
+        if referral_enabled:
+            schedule.every(args.referral_interval).seconds.do(run_referral_processing)
         if winner_enabled:
             schedule.every(args.winner_interval).seconds.do(run_winner_selection)
     
@@ -251,8 +265,16 @@ def main():
         next_points = f"{current_time.hour}:30" if current_time.minute < 30 else f"{(current_time.hour + 1) % 24:02d}:30"
         logger.info(f"Next points calculation: {next_points}")
         
-        # Calculate next 5-minute interval with 21s offset
         current_minute = current_time.minute
+        next_referral_minute = ((current_minute // 10) + 1) * 10
+        if next_referral_minute >= 60:
+            next_referral_minute = 0
+            next_referral_hour = (current_time.hour + 1) % 24
+        else:
+            next_referral_hour = current_time.hour
+        logger.info(f"Next referral processing: {next_referral_hour:02d}:{next_referral_minute:02d}:00")
+        
+        # Calculate next 5-minute interval with 21s offset
         next_5min_base = ((current_minute // 5) + 1) * 5
         if next_5min_base >= 60:
             next_5min_base = 0
