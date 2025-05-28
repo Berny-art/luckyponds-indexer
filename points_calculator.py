@@ -205,53 +205,43 @@ class PointsCalculator:
             referrer_address = result['referrer_address']
             
             # Begin transaction
-            conn.execute('BEGIN')
+            conn.execute('BEGIN TRANSACTION')
             
-            # Activate the referral
-            cursor.execute('''
-            UPDATE user_referrals 
-            SET is_activated = 1, activated_at = ? 
-            WHERE address = ?
-            ''', (timestamp, user_address))
-            
-            # Award bonus points to the referrer
-            tx_hash = f"referral_{user_address}_{timestamp}"  # Create a unique identifier
-            
-            # Ensure referrer exists in user_points
-            cursor.execute('''
-            INSERT OR IGNORE INTO user_points 
-            (address, total_points, toss_points, winner_points, referral_points, last_updated) 
-            VALUES (?, ?, 0, 0, ?, ?)
-            ''', (referrer_address, REFERRAL_BONUS_POINTS, REFERRAL_BONUS_POINTS, timestamp))
-            
-            # Update existing record (whether just inserted or already existed)
-            cursor.execute('''
-            UPDATE user_points 
-            SET total_points = total_points + ?,
-                referral_points = referral_points + ?,
-                last_updated = ? 
-            WHERE address = ?
-            ''', (REFERRAL_BONUS_POINTS, REFERRAL_BONUS_POINTS, timestamp, referrer_address))
-            
-            # Log the referral bonus in the points events table
-            cursor.execute('''
-            INSERT INTO user_point_events 
-            (address, event_type, points, tx_hash, pond_type, timestamp) 
-            VALUES (?, 'referral', ?, ?, 'referral', ?)
-            ''', (referrer_address, REFERRAL_BONUS_POINTS, tx_hash, timestamp))
-            
-            # Commit the transaction
-            conn.commit()
-            
-            logger.info(f"Activated referral: {user_address} referred by {referrer_address}, awarded {REFERRAL_BONUS_POINTS} points")
-            conn.close()
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error checking/activating referral: {e}")
-            if conn in locals():
+            try:
+                # Activate the referral
+                cursor.execute('''
+                UPDATE user_referrals 
+                SET is_activated = 1, activated_at = ? 
+                WHERE address = ?
+                ''', (timestamp, user_address))
+                
+                # Award referral bonus points to the referrer
+                self.add_user_points(
+                    referrer_address, 
+                    'referral', 
+                    REFERRAL_BONUS_POINTS, 
+                    'activation_' + user_address,  # Use a unique identifier
+                    'referral',  # pond_type
+                    timestamp
+                )
+                
+                # Commit the transaction
+                conn.commit()
+                conn.close()
+                
+                logger.info(f"Activated referral: {user_address} referred by {referrer_address}")
+                return True
+                
+            except Exception as e:
                 conn.rollback()
                 conn.close()
+                logger.error(f"Error activating referral for {user_address}: {e}")
+                return False
+                
+        except Exception as e:
+            if conn:
+                conn.close()
+            logger.error(f"Error checking referral for {user_address}: {e}")
             return False
     
     def generate_referral_code(self, length: int = 8) -> str:

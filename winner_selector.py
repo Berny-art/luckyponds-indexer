@@ -40,7 +40,7 @@ while processed_count < max_iterations:
         break
 
     processed_count += 1
-    pond_type = Web3.toHex(perform_data[:32]) if len(perform_data) >= 32 else "unknown"
+    pond_type = Web3.to_hex(perform_data[:32]) if len(perform_data) >= 32 else "unknown"
     log(f"Processing pond {processed_count}: {pond_type[:10]}...")
 
     try:
@@ -50,7 +50,7 @@ while processed_count < max_iterations:
         max_fee = base_fee + priority_fee
 
         # Decode pondType from performData
-        decoded_pond = w3.codec.decode_single("bytes32", perform_data)
+        decoded_pond = w3.codec.decode("bytes32", perform_data)
 
         # Estimate gas with buffer
         estimated_gas = contract.functions.selectLuckyWinner(decoded_pond).estimate_gas({"from": account.address})

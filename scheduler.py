@@ -12,6 +12,7 @@ from datetime import datetime
 
 # Import our components
 from points_calculator import PointsCalculator
+from recalculate_points import process_referrals
 from utils import (
     get_events_db_path, 
     get_app_db_path, 
@@ -137,6 +138,17 @@ def run_winner_selection():
         logger.error(f"Winner selection failed: {e}")
         return 0
 
+def run_referral_processing():
+    """Run referral processing to activate pending referrals."""
+    logger.info("Starting referral processing")
+    try:
+        activated_count = process_referrals()
+        logger.info(f"Referral processing completed: {activated_count} referrals activated")
+        return activated_count
+    except Exception as e:
+        logger.error(f"Referral processing failed: {e}")
+        return 0
+    
 def main():
     """Main scheduler function."""
     parser = argparse.ArgumentParser(description="Lucky Ponds Scheduler")
@@ -154,6 +166,8 @@ def main():
                        help="Run only points calculation once")
     parser.add_argument("--winner-only", action="store_true",
                        help="Run only winner selection once")
+    parser.add_argument("--referrals-only", action="store_true",
+                       help="Run only referral processing once")
     
     args = parser.parse_args()
     
@@ -179,15 +193,17 @@ def main():
     
     # Initialize winner selection if enabled
     winner_enabled = not args.disable_winner_selection and initialize_web3()
+    referral_enabled = not args.disable_referral_processing
     
     # Configure scheduling based on timing mode
     if args.use_utc_timing:
         logger.info("Starting UTC-based scheduler:")
-        logger.info("  - Points calculation: every hour at :30")
-        logger.info("  - Winner selection: 5-min ponds at XX:00:21/XX:05:21/etc, hourly at XX:01:30, daily/weekly/monthly at 00:01:30")
         
         # Points calculation: every hour at 30 minutes past
         schedule.every().hour.at(":30").do(run_points_calculation)
+
+        # Referral processing: every 10 minutes at 5 seconds past
+        schedule.every(5).minutes.do(run_referral_processing)
         
         if winner_enabled:
             # 5-minute ponds: 21 seconds after each 5-minute interval
@@ -219,6 +235,9 @@ def main():
     if not args.use_utc_timing:
         logger.info("Running initial tasks...")
         run_points_calculation()
+        if referral_enabled:
+            time.sleep(2)
+            run_referral_processing()
         if winner_enabled:
             time.sleep(5)
             run_winner_selection()
