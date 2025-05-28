@@ -158,6 +158,8 @@ def main():
                        help=f"Winner selection interval in seconds (default: {WINNER_INTERVAL})")
     parser.add_argument("--disable-winner-selection", action="store_true",
                        help="Disable winner selection")
+    parser.add_argument("--disable-referral-processing", action="store_true",
+                       help="Disable referral processing")
     parser.add_argument("--use-utc-timing", action="store_true",
                        help="Use UTC-based cron-style timing instead of intervals")
     parser.add_argument("--run-once", action="store_true",
