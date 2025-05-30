@@ -303,8 +303,8 @@ def get_user_data(address):
             "referral_points": 0,
             "referral_code": None,
             "referrer_code_used": None,
-            "referrals_count": 0,
-            "referrals_activated": 0,
+            "referrals_count": 0,        # Total people who used this user's code
+            "referrals_activated": 0,    # Activated referrals (people who made tosses)
             "total_tosses": 0,
             "total_value_spent": "0",
             "total_wins": 0
@@ -319,7 +319,7 @@ def get_user_data(address):
             result["winner_points"] = points_data["winner_points"]
             result["referral_points"] = points_data["referral_points"]
         
-        # Get referral info
+        # Get referral info for this user
         app_cursor.execute('SELECT * FROM user_referrals WHERE address = ?', (address,))
         referral_data = app_cursor.fetchone()
         if referral_data:
@@ -333,17 +333,19 @@ def get_user_data(address):
                 if referrer_code:
                     result["referrer_code_used"] = referrer_code["referral_code"]
         
-        # Count referrals (total and activated)
+        # Count referrals: people who used THIS user's referral code
         app_cursor.execute('''
-        SELECT COUNT(*), SUM(is_activated) 
+        SELECT 
+            COUNT(*) as total_referrals,
+            COALESCE(SUM(is_activated), 0) as active_referrals
         FROM user_referrals 
         WHERE referrer_address = ?
         ''', (address,))
         
         referral_counts = app_cursor.fetchone()
-        if referral_counts and referral_counts[0]:
-            result["referrals_count"] = referral_counts[0]
-            result["referrals_activated"] = referral_counts[1] or 0
+        if referral_counts:
+            result["referrals_count"] = referral_counts["total_referrals"] or 0
+            result["referrals_activated"] = referral_counts["active_referrals"] or 0
         
         # Get events database connection for toss and win data
         events_conn = events_db.get_connection()
@@ -377,7 +379,8 @@ def get_user_data(address):
         events_conn.close()
         
         # Check if the user exists (has any activity)
-        if result["total_tosses"] == 0 and result["total_wins"] == 0 and not points_data and not referral_data:
+        if (result["total_tosses"] == 0 and result["total_wins"] == 0 and 
+            not points_data and not referral_data):
             return jsonify(result), 404
         
         return jsonify(result), 200

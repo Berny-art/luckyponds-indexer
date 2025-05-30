@@ -259,32 +259,9 @@ def main():
             run_winner_selection()
     else:
         logger.info("UTC timing mode - tasks will run at scheduled times")
-        # Show next execution times
-        current_time = datetime.now()
-        logger.info(f"Current UTC time: {current_time.strftime('%H:%M:%S')}")
-        next_points = f"{current_time.hour}:30" if current_time.minute < 30 else f"{(current_time.hour + 1) % 24:02d}:30"
-        logger.info(f"Next points calculation: {next_points}")
         
-        current_minute = current_time.minute
-        next_referral_minute = ((current_minute // 10) + 1) * 10
-        if next_referral_minute >= 60:
-            next_referral_minute = 0
-            next_referral_hour = (current_time.hour + 1) % 24
-        else:
-            next_referral_hour = current_time.hour
-        logger.info(f"Next referral processing: {next_referral_hour:02d}:{next_referral_minute:02d}:00")
-        
-        # Calculate next 5-minute interval with 21s offset
-        next_5min_base = ((current_minute // 5) + 1) * 5
-        if next_5min_base >= 60:
-            next_5min_base = 0
-            next_winner_hour = (current_time.hour + 1) % 24
-        else:
-            next_winner_hour = current_time.hour
-        logger.info(f"Next winner selection: {next_winner_hour:02d}:{next_5min_base:02d}:21")
-    
     # Main scheduler loop
-    logger.info("Scheduler running. Press Ctrl+C to stop.")
+    logger.info("Scheduler running.")
     try:
         while True:
             schedule.run_pending()
