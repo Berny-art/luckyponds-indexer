@@ -224,21 +224,19 @@ def main():
             # Run at :21 seconds of every minute, but only when minute % 5 == 0
             # schedule.every().minute.at(":21").do(lambda: run_winner_selection() if datetime.now().minute % 5 == 0 else None)
             
-            # Hourly ponds: 1 minute 30 seconds after each hour (61s timelock + 29s buffer)  
-            schedule.every().hour.at("01:05").do(run_winner_selection)
+            # Hourly ponds: 1 minute 15 seconds after each hour (60s timelock + 15s buffer)  
+            schedule.every().hour.at("01:15").do(run_winner_selection)
             
-            # Daily ponds: 1 minute 30 seconds after midnight UTC
-            schedule.every().day.at("00:01:05").do(run_winner_selection)
+            # Daily ponds: 1 minute 15 seconds after midnight UTC
+            schedule.every().day.at("00:01:15").do(run_winner_selection)
             
-            # Weekly ponds: 1 minute 30 seconds after Saturday midnight UTC
-            schedule.every().saturday.at("00:01:05").do(run_winner_selection)
+            # Weekly ponds: 1 minute 15 seconds after Saturday midnight UTC
+            schedule.every().saturday.at("00:01:15").do(run_winner_selection)
             
-            # Monthly ponds: 1 minute 30 seconds after first day of month
-            schedule.every().day.at("00:01:30").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
+            # Monthly ponds: 1 minute 15 seconds after first day of month
+            schedule.every().day.at("00:01:15").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
     else:
         logger.info(f"Starting interval-based scheduler:")
-        logger.info(f"  - Points calculation: every {args.points_interval} seconds")
-        logger.info(f"  - Winner selection: every {args.winner_interval} seconds")
         
         # Traditional interval-based scheduling
         schedule.every(args.points_interval).seconds.do(run_points_calculation)
