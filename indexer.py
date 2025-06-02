@@ -77,7 +77,7 @@ class FastBlockchainIndexer:
                 })
                 return True, logs
             except Exception as e:
-                delay = 5 ** attempt
+                delay = 20 ** attempt
                 logger.error(f"Error getting logs for blocks {start_block}-{end_block} (attempt {attempt+1}/{max_retries}): {e}")
                 
                 # Check for invalid block range error
@@ -87,7 +87,7 @@ class FastBlockchainIndexer:
                 
                 # Check for rate limiting
                 if "rate limited" in str(e).lower() or "429" in str(e):
-                    delay = delay * 2
+                    delay = delay
                     logger.warning(f"Rate limit encountered. Waiting {delay} seconds before retry...")
                 
                 if attempt < max_retries - 1:
@@ -478,7 +478,7 @@ class FastBlockchainIndexer:
                 self.process_block_range(start_block, end_block)
                 
                 # Small delay to avoid hammering the RPC
-                time.sleep(1)
+                time.sleep(3)
                 
             except BlockNotFound:
                 logger.error("Block not found, network might be syncing")

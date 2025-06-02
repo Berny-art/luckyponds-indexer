@@ -96,6 +96,10 @@ def run_winner_selection():
         max_iterations = 10
         initial_balance = w3.from_wei(w3.eth.get_balance(account.address), 'ether')
         
+        # Check what time it is for debugging
+        now = datetime.timezone.utc()
+        logger.info(f"Winner selection check at {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        
         while processed_count < max_iterations:
             upkeep_needed, perform_data = contract.functions.checkUpkeep(b"").call()
             
@@ -213,28 +217,34 @@ def main():
     if args.use_utc_timing:
         logger.info("Starting UTC-based scheduler:")
         
-        # Points calculation: every hour at 30 minutes past
+        # Points calculation: every 15 minutes
         schedule.every(15).minutes.do(run_points_calculation)
 
-        # Referral processing: every 10 minutes at 5 seconds past
-        schedule.every(5).minutes.do(run_referral_processing)
+        # Referral processing: every 5 minutes
+        if referral_enabled:
+            schedule.every(5).minutes.do(run_referral_processing)
         
         if winner_enabled:
-            # 5-minute ponds: 21 seconds after each 5-minute interval
-            # Run at :21 seconds of every minute, but only when minute % 5 == 0
-            # schedule.every().minute.at(":21").do(lambda: run_winner_selection() if datetime.now().minute % 5 == 0 else None)
+            # Create a wrapper function to handle all winner selection logic
+            def run_scheduled_winner_selection():
+                """Run winner selection with proper timing logic for different pond types."""
+                now = datetime.utcnow()
+                current_time = now.strftime("%H:%M:%S")
+                
+                # Log when we're checking for winner selection
+                logger.debug(f"Checking winner selection at {current_time} UTC")
+                
+                # Always try to run winner selection - let the contract decide what needs to be done
+                result = run_winner_selection()
+                
+                if result > 0:
+                    logger.info(f"Winner selection completed at {current_time} UTC - {result} selections made")
+                
+                return result
             
-            # Hourly ponds: 1 minute 15 seconds after each hour (60s timelock + 15s buffer)  
-            schedule.every().hour.at("01:15").do(run_winner_selection)
-            
-            # Daily ponds: 1 minute 15 seconds after midnight UTC
-            schedule.every().day.at("00:01:15").do(run_winner_selection)
-            
-            # Weekly ponds: 1 minute 15 seconds after Saturday midnight UTC
-            schedule.every().saturday.at("00:01:15").do(run_winner_selection)
-            
-            # Monthly ponds: 1 minute 15 seconds after first day of month
-            schedule.every().day.at("00:01:15").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
+            # Run winner selection every minute at 15 seconds past
+            # This ensures we catch all pond types that need winner selection
+            schedule.every().minute.at(":15").do(run_scheduled_winner_selection)
     else:
         logger.info(f"Starting interval-based scheduler:")
         
