@@ -6,7 +6,7 @@ import logging
 import schedule
 from dotenv import load_dotenv
 from web3 import Web3
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Import our components
 from points_calculator import PointsCalculator
@@ -170,7 +170,7 @@ def main():
         schedule.every().saturday.at("00:01:20").do(run_winner_selection)
         
         # Monthly ponds: 1 minute 25 seconds after first day of month
-        schedule.every().day.at("00:01:25").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
+        schedule.every().day.at("00:01:25").do(lambda: run_winner_selection() if datetime.now(timezone.utc).day == 1 else None)
         
         logger.info("Winner selection scheduled at specific UTC times")
     else:
