@@ -4,8 +4,6 @@ import json
 import time
 import logging
 import schedule
-import argparse
-from typing import Dict, Any
 from dotenv import load_dotenv
 from web3 import Web3
 from datetime import datetime
@@ -28,9 +26,6 @@ load_dotenv()
 # Configuration
 EVENTS_DB_PATH = get_events_db_path()
 APP_DB_PATH = get_app_db_path()
-POINTS_INTERVAL = int(os.getenv("POINTS_CALCULATION_INTERVAL", "900"))  # 15 minutes
-WINNER_INTERVAL = int(os.getenv("WINNER_SELECTION_INTERVAL", "300"))     # 5 minutes
-REFERRAL_INTERVAL = int(os.getenv("REFERRAL_PROCESSING_INTERVAL", "1800"))  # 30 minutes
 
 # Winner selection configuration
 RPC_URL = os.getenv("RPC_URL")
@@ -96,10 +91,6 @@ def run_winner_selection():
         max_iterations = 10
         initial_balance = w3.from_wei(w3.eth.get_balance(account.address), 'ether')
         
-        # Check what time it is for debugging
-        now = datetime.timezone.utc()
-        logger.info(f"Winner selection check at {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        
         while processed_count < max_iterations:
             upkeep_needed, perform_data = contract.functions.checkUpkeep(b"").call()
             
@@ -156,120 +147,38 @@ def run_referral_processing():
     
 def main():
     """Main scheduler function."""
-    parser = argparse.ArgumentParser(description="Lucky Ponds Scheduler")
-    parser.add_argument("--points-interval", type=int, default=POINTS_INTERVAL,
-                       help=f"Points calculation interval in seconds (default: {POINTS_INTERVAL})")
-    parser.add_argument("--winner-interval", type=int, default=WINNER_INTERVAL,
-                       help=f"Winner selection interval in seconds (default: {WINNER_INTERVAL})")
-    parser.add_argument("--referral-interval", type=int, default=REFERRAL_INTERVAL,
-                       help=f"Referral processing interval in seconds (default: {REFERRAL_INTERVAL})")
-    parser.add_argument("--disable-winner-selection", action="store_true",
-                       help="Disable winner selection")
-    parser.add_argument("--disable-referral-processing", action="store_true",
-                       help="Disable referral processing")
-    parser.add_argument("--use-utc-timing", action="store_true",
-                       help="Use UTC-based cron-style timing instead of intervals")
-    parser.add_argument("--run-once", action="store_true",
-                       help="Run both tasks once and exit")
-    parser.add_argument("--points-only", action="store_true",
-                       help="Run only points calculation once")
-    parser.add_argument("--winner-only", action="store_true",
-                       help="Run only winner selection once")
-    parser.add_argument("--referrals-only", action="store_true",
-                       help="Run only referral processing once")
+    logger.info("Starting UTC-based scheduler")
     
+    # Initialize winner selection
+    winner_enabled = initialize_web3()
     
-    args = parser.parse_args()
-    
-    # Handle one-time runs
-    if args.run_once:
-        logger.info("Running all tasks once")
-        run_points_calculation()
-        if not args.disable_referral_processing:
-            time.sleep(1)
-            run_referral_processing()
-        if not args.disable_winner_selection and initialize_web3():
-            time.sleep(2)
-            run_winner_selection()
-        return
-    
-    if args.points_only:
-        logger.info("Running points calculation once")
-        run_points_calculation()
-        return
-    
-    if args.winner_only:
-        logger.info("Running winner selection once")
-        if initialize_web3():
-            run_winner_selection()
-        return
-    
-    if args.referrals_only:
-        logger.info("Running referral processing once")
-        run_referral_processing()
-        return
-    
-    # Initialize winner selection if enabled
-    winner_enabled = not args.disable_winner_selection and initialize_web3()
-    referral_enabled = not args.disable_referral_processing
-    
-    # Configure scheduling based on timing mode
-    if args.use_utc_timing:
-        logger.info("Starting UTC-based scheduler:")
-        
-        # Points calculation: every 15 minutes
-        schedule.every(15).minutes.do(run_points_calculation)
+    # Schedule points calculation every 15 minutes
+    schedule.every(15).minutes.do(run_points_calculation)
 
-        # Referral processing: every 5 minutes
-        if referral_enabled:
-            schedule.every(5).minutes.do(run_referral_processing)
-        
-        if winner_enabled:
-            # Create a wrapper function to handle all winner selection logic
-            def run_scheduled_winner_selection():
-                """Run winner selection with proper timing logic for different pond types."""
-                now = datetime.utcnow()
-                current_time = now.strftime("%H:%M:%S")
-                
-                # Log when we're checking for winner selection
-                logger.debug(f"Checking winner selection at {current_time} UTC")
-                
-                # Always try to run winner selection - let the contract decide what needs to be done
-                result = run_winner_selection()
-                
-                if result > 0:
-                    logger.info(f"Winner selection completed at {current_time} UTC - {result} selections made")
-                
-                return result
-            
-            # Run winner selection every minute at 15 seconds past
-            # This ensures we catch all pond types that need winner selection
-            schedule.every().minute.at(":15").do(run_scheduled_winner_selection)
-    else:
-        logger.info(f"Starting interval-based scheduler:")
-        
-        # Traditional interval-based scheduling
-        schedule.every(args.points_interval).seconds.do(run_points_calculation)
-        if referral_enabled:
-            schedule.every(args.referral_interval).seconds.do(run_referral_processing)
-        if winner_enabled:
-            schedule.every(args.winner_interval).seconds.do(run_winner_selection)
+    # Schedule referral processing every 15 minutes
+    schedule.every(15).minutes.do(run_referral_processing)
     
-    # Run initial tasks (only if not using UTC timing to avoid immediate execution)
-    if not args.use_utc_timing:
-        logger.info("Running initial tasks...")
-        run_points_calculation()
-        if referral_enabled:
-            time.sleep(2)
-            run_referral_processing()
-        if winner_enabled:
-            time.sleep(5)
-            run_winner_selection()
+    if winner_enabled:
+        # Winner selection only runs on specific schedules
+        # Hourly ponds: 1 minute 10 seconds after each hour
+        schedule.every().hour.at("01:10").do(run_winner_selection)
+        
+        # Daily ponds: 1 minute 15 seconds after midnight UTC
+        schedule.every().day.at("00:01:15").do(run_winner_selection)
+        
+        # Weekly ponds: 1 minute 20 seconds after Saturday midnight UTC
+        schedule.every().saturday.at("00:01:20").do(run_winner_selection)
+        
+        # Monthly ponds: 1 minute 25 seconds after first day of month
+        schedule.every().day.at("00:01:25").do(lambda: run_winner_selection() if datetime.now().day == 1 else None)
+        
+        logger.info("Winner selection scheduled at specific UTC times")
     else:
-        logger.info("UTC timing mode - tasks will run at scheduled times")
+        logger.info("Winner selection disabled")
+    
+    logger.info("Scheduler running - tasks will run at scheduled times")
         
     # Main scheduler loop
-    logger.info("Scheduler running.")
     try:
         while True:
             schedule.run_pending()
