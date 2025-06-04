@@ -42,6 +42,7 @@ def setup_events_database(db_path: str, start_block: int = 0):
             timestamp INTEGER NOT NULL,
             total_pond_tosses INTEGER NOT NULL,
             total_pond_value TEXT NOT NULL,
+            token_address TEXT NOT NULL,
             UNIQUE(tx_hash, pond_type, frog_address)
         )
         ''')
@@ -57,6 +58,7 @@ def setup_events_database(db_path: str, start_block: int = 0):
             winner_address TEXT NOT NULL,
             prize TEXT NOT NULL,
             selector TEXT NOT NULL,
+            token_address TEXT NOT NULL,
             UNIQUE(tx_hash, pond_type)
         )
         ''')
@@ -114,10 +116,12 @@ def setup_events_database(db_path: str, start_block: int = 0):
         cursor.execute('CREATE INDEX idx_coin_tossed_block ON coin_tossed_events (block_number)')
         cursor.execute('CREATE INDEX idx_coin_tossed_address ON coin_tossed_events (frog_address)')
         cursor.execute('CREATE INDEX idx_coin_tossed_timestamp ON coin_tossed_events (block_timestamp)')
+        cursor.execute('CREATE INDEX idx_coin_tossed_token ON coin_tossed_events (token_address)')
         
         cursor.execute('CREATE INDEX idx_winner_block ON lucky_winner_selected_events (block_number)')
         cursor.execute('CREATE INDEX idx_winner_address ON lucky_winner_selected_events (winner_address)')
         cursor.execute('CREATE INDEX idx_winner_timestamp ON lucky_winner_selected_events (block_timestamp)')
+        cursor.execute('CREATE INDEX idx_winner_token ON lucky_winner_selected_events (token_address)')
         
         cursor.execute('CREATE INDEX idx_pond_action_pond ON pond_action_events (pond_type)')
         cursor.execute('CREATE INDEX idx_pond_action_timestamp ON pond_action_events (block_timestamp)')

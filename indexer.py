@@ -126,15 +126,15 @@ class FastBlockchainIndexer:
     
     def store_coin_tossed_event(self, conn, tx_hash: str, block_number: int, block_timestamp: int, 
                               pond_type: str, participant_address: str, amount: str, 
-                              timestamp: int, total_pond_tosses: int, total_pond_value: str):
+                              timestamp: int, total_pond_tosses: int, total_pond_value: str, token_address: str):
         """Store a CoinTossed event in the database."""
         cursor = conn.cursor()
         try:
             cursor.execute('''
             INSERT INTO coin_tossed_events (
                 tx_hash, block_number, block_timestamp, pond_type, 
-                frog_address, amount, timestamp, total_pond_tosses, total_pond_value
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                frog_address, amount, timestamp, total_pond_tosses, total_pond_value, token_address
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 tx_hash,
                 block_number,
@@ -144,22 +144,23 @@ class FastBlockchainIndexer:
                 amount,
                 timestamp,
                 total_pond_tosses,
-                total_pond_value
+                total_pond_value,
+                token_address
             ))
         except sqlite3.IntegrityError:
             # Skip duplicate events
             pass
     
     def store_lucky_winner_event(self, conn, tx_hash: str, block_number: int, block_timestamp: int,
-                               pond_type: str, winner_address: str, prize: str, selector: str):
+                               pond_type: str, winner_address: str, prize: str, selector: str, token_address: str):
         """Store a LuckyWinnerSelected event in the database."""
         cursor = conn.cursor()
         try:
             cursor.execute('''
             INSERT INTO lucky_winner_selected_events (
                 tx_hash, block_number, block_timestamp, pond_type, 
-                winner_address, prize, selector
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                winner_address, prize, selector, token_address
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 tx_hash,
                 block_number,
@@ -167,7 +168,8 @@ class FastBlockchainIndexer:
                 pond_type,
                 winner_address,
                 prize,
-                selector
+                selector,
+                token_address
             ))
         except sqlite3.IntegrityError:
             # Skip duplicate events
@@ -290,10 +292,11 @@ class FastBlockchainIndexer:
                             timestamp = args['timestamp']
                             total_pond_tosses = args['totalPondTosses']
                             total_pond_value = str(args['totalPondValue'])
+                            token_address = args['tokenAddress'].lower()
                             
                             self.store_coin_tossed_event(
                                 conn, tx_hash, block_number, block_timestamp, pond_type,
-                                participant_address, amount, timestamp, total_pond_tosses, total_pond_value
+                                participant_address, amount, timestamp, total_pond_tosses, total_pond_value, token_address
                             )
                             
                         elif event_name == 'LuckyWinnerSelected':
@@ -308,10 +311,11 @@ class FastBlockchainIndexer:
                             winner_address = winner_address.lower()
                             prize = str(args['prize'])
                             selector = args['selector'].lower()
+                            token_address = args['tokenAddress'].lower()
                             
                             self.store_lucky_winner_event(
                                 conn, tx_hash, block_number, block_timestamp, pond_type,
-                                winner_address, prize, selector
+                                winner_address, prize, selector, token_address
                             )
                             
                         elif event_name == 'PondAction':

@@ -1,6 +1,4 @@
 import os
-import time
-import logging
 import functools
 from datetime import datetime
 from flask import Flask, jsonify, request
@@ -12,8 +10,6 @@ from data_access import EventsDatabase, ApplicationDatabase
 from utils import (
     get_events_db_path, 
     get_app_db_path, 
-    get_referral_bonus_points,
-    get_current_timestamp,
     setup_logger
 )
 
@@ -393,26 +389,36 @@ def get_user_data(address):
             "timestamp": datetime.now().isoformat()
         }), 500
 
-@app.route('/winners/recent', methods=['GET'])
+@app.route('/events/wins', methods=['GET'])
 @require_api_key
-def get_recent_winners():
+def get_wins():
     """
-    Get list of recent winners.
+    Get list of winner events.
     Query parameters:
     - limit: number of results (default 20)
-    - offset: pagination offset (default 0)
+    - offset: pagination offset (default 0)  
     - pond_type: filter by pond type (optional)
+    - token_address: filter by token address (optional)
+    - user_address: filter by user address (optional)
     """
     try:
         limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
         offset = int(request.args.get('offset', 0))
         pond_type = request.args.get('pond_type')
+        token_address = request.args.get('token_address')
+        user_address = request.args.get('user_address')
+        
+        # Normalize addresses if provided
+        if token_address:
+            token_address = token_address.lower()
+        if user_address:
+            user_address = user_address.lower()
         
         # Get events database connection
         conn = events_db.get_connection()
         cursor = conn.cursor()
         
-        # Build query
+        # Build query with filters
         query = '''
         SELECT 
             lw.tx_hash,
@@ -421,16 +427,26 @@ def get_recent_winners():
             lw.pond_type,
             lw.winner_address,
             lw.prize,
-            lw.selector
+            lw.selector,
+            lw.token_address
         FROM lucky_winner_selected_events lw
+        WHERE 1=1
         '''
         
         params = []
         
-        # Add pond_type filter if provided
+        # Add filters
         if pond_type:
-            query += ' WHERE lw.pond_type = ?'
+            query += ' AND lw.pond_type = ?'
             params.append(pond_type)
+            
+        if token_address:
+            query += ' AND lw.token_address = ?'
+            params.append(token_address)
+            
+        if user_address:
+            query += ' AND lw.winner_address = ?'
+            params.append(user_address)
         
         # Add ordering and pagination
         query += ' ORDER BY lw.block_timestamp DESC LIMIT ? OFFSET ?'
@@ -440,13 +456,22 @@ def get_recent_winners():
         winners = cursor.fetchall()
         
         # Count total winners for pagination info
-        count_query = 'SELECT COUNT(*) FROM lucky_winner_selected_events'
-        if pond_type:
-            count_query += ' WHERE pond_type = ?'
-            cursor.execute(count_query, [pond_type])
-        else:
-            cursor.execute(count_query)
+        count_query = 'SELECT COUNT(*) FROM lucky_winner_selected_events WHERE 1=1'
+        count_params = []
         
+        if pond_type:
+            count_query += ' AND pond_type = ?'
+            count_params.append(pond_type)
+            
+        if token_address:
+            count_query += ' AND token_address = ?'
+            count_params.append(token_address)
+            
+        if user_address:
+            count_query += ' AND winner_address = ?'
+            count_params.append(user_address)
+        
+        cursor.execute(count_query, count_params)
         total_winners = cursor.fetchone()[0]
         
         # Convert to list of dictionaries
@@ -462,7 +487,8 @@ def get_recent_winners():
                 "pond_type": winner['pond_type'],
                 "winner_address": winner['winner_address'],
                 "prize": winner['prize'],
-                "selector": winner['selector']
+                "selector": winner['selector'],
+                "token_address": winner['token_address']
             })
         
         conn.close()
@@ -475,7 +501,310 @@ def get_recent_winners():
         }), 200
         
     except Exception as e:
-        logger.error(f"Error getting recent winners: {e}")
+        logger.error(f"Error getting winners: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/events/tosses', methods=['GET'])
+@require_api_key
+def get_tosses():
+    """
+    Get list of coin toss events.
+    Query parameters:
+    - limit: number of results (default 20)
+    - offset: pagination offset (default 0)
+    - pond_type: filter by pond type (optional)
+    - token_address: filter by token address (optional)
+    - user_address: filter by user address (optional)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
+        offset = int(request.args.get('offset', 0))
+        pond_type = request.args.get('pond_type')
+        token_address = request.args.get('token_address')
+        user_address = request.args.get('user_address')
+        
+        # Normalize addresses if provided
+        if token_address:
+            token_address = token_address.lower()
+        if user_address:
+            user_address = user_address.lower()
+        
+        # Get events database connection
+        conn = events_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Build query with filters
+        query = '''
+        SELECT 
+            ct.tx_hash,
+            ct.block_number,
+            ct.block_timestamp,
+            ct.pond_type,
+            ct.frog_address,
+            ct.amount,
+            ct.timestamp,
+            ct.total_pond_tosses,
+            ct.total_pond_value,
+            ct.token_address
+        FROM coin_tossed_events ct
+        WHERE 1=1
+        '''
+        
+        params = []
+        
+        # Add filters
+        if pond_type:
+            query += ' AND ct.pond_type = ?'
+            params.append(pond_type)
+            
+        if token_address:
+            query += ' AND ct.token_address = ?'
+            params.append(token_address)
+            
+        if user_address:
+            query += ' AND ct.frog_address = ?'
+            params.append(user_address)
+        
+        # Add ordering and pagination
+        query += ' ORDER BY ct.block_timestamp DESC LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        tosses = cursor.fetchall()
+        
+        # Count total tosses for pagination info
+        count_query = 'SELECT COUNT(*) FROM coin_tossed_events WHERE 1=1'
+        count_params = []
+        
+        if pond_type:
+            count_query += ' AND pond_type = ?'
+            count_params.append(pond_type)
+            
+        if token_address:
+            count_query += ' AND token_address = ?'
+            count_params.append(token_address)
+            
+        if user_address:
+            count_query += ' AND frog_address = ?'
+            count_params.append(user_address)
+        
+        cursor.execute(count_query, count_params)
+        total_tosses = cursor.fetchone()[0]
+        
+        # Convert to list of dictionaries
+        result = []
+        for toss in tosses:
+            # Format timestamp as ISO date
+            timestamp = datetime.fromtimestamp(toss['block_timestamp']).isoformat()
+            
+            result.append({
+                "tx_hash": toss['tx_hash'],
+                "block_number": toss['block_number'],
+                "timestamp": timestamp,
+                "pond_type": toss['pond_type'],
+                "frog_address": toss['frog_address'],
+                "amount": toss['amount'],
+                "total_pond_tosses": toss['total_pond_tosses'],
+                "total_pond_value": toss['total_pond_value'],
+                "token_address": toss['token_address']
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            "tosses": result,
+            "total_tosses": total_tosses,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting coin tosses: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/events/tosses/<address>', methods=['GET'])
+@require_api_key
+def get_user_tosses(address):
+    """
+    Get list of coin toss events for a specific user.
+    Query parameters:
+    - limit: number of results (default 20)
+    - offset: pagination offset (default 0)
+    - token_address: filter by token address (optional)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
+        offset = int(request.args.get('offset', 0))
+        token_address = request.args.get('token_address')
+        address = address.lower()
+        
+        # Normalize token address if provided
+        if token_address:
+            token_address = token_address.lower()
+        
+        # Get events database connection
+        conn = events_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Build query with optional token filter
+        query = '''
+        SELECT 
+            id, tx_hash, block_number, block_timestamp, pond_type, 
+            amount, timestamp, total_pond_tosses, total_pond_value, token_address
+        FROM coin_tossed_events 
+        WHERE frog_address = ?
+        '''
+        params = [address]
+        
+        if token_address:
+            query += ' AND token_address = ?'
+            params.append(token_address)
+        
+        query += ' ORDER BY block_timestamp DESC LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        tosses = cursor.fetchall()
+        
+        # Count total tosses for pagination
+        count_query = 'SELECT COUNT(*) FROM coin_tossed_events WHERE frog_address = ?'
+        count_params = [address]
+        
+        if token_address:
+            count_query += ' AND token_address = ?'
+            count_params.append(token_address)
+        
+        cursor.execute(count_query, count_params)
+        total_tosses = cursor.fetchone()[0]
+        
+        # Convert to list of dictionaries
+        result = []
+        for toss in tosses:
+            # Format timestamp as ISO date
+            timestamp = datetime.fromtimestamp(toss['block_timestamp']).isoformat()
+            
+            result.append({
+                "id": toss['id'],
+                "tx_hash": toss['tx_hash'],
+                "block_number": toss['block_number'],
+                "timestamp": timestamp,
+                "pond_type": toss['pond_type'],
+                "amount": toss['amount'],
+                "total_pond_tosses": toss['total_pond_tosses'],
+                "total_pond_value": toss['total_pond_value'],
+                "token_address": toss['token_address']
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            "address": address,
+            "tosses": result,
+            "total_tosses": total_tosses,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting user tosses: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/events/wins/<address>', methods=['GET'])
+@require_api_key
+def get_user_wins(address):
+    """
+    Get list of winner events for a specific user.
+    Query parameters:
+    - limit: number of results (default 20)
+    - offset: pagination offset (default 0)
+    - token_address: filter by token address (optional)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
+        offset = int(request.args.get('offset', 0))
+        token_address = request.args.get('token_address')
+        address = address.lower()
+        
+        # Normalize token address if provided
+        if token_address:
+            token_address = token_address.lower()
+        
+        # Get events database connection
+        conn = events_db.get_connection()
+        cursor = conn.cursor()
+        
+        # Build query with optional token filter
+        query = '''
+        SELECT 
+            id, tx_hash, block_number, block_timestamp, pond_type, 
+            prize, selector, token_address
+        FROM lucky_winner_selected_events 
+        WHERE winner_address = ?
+        '''
+        params = [address]
+        
+        if token_address:
+            query += ' AND token_address = ?'
+            params.append(token_address)
+        
+        query += ' ORDER BY block_timestamp DESC LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        
+        cursor.execute(query, params)
+        wins = cursor.fetchall()
+        
+        # Count total wins for pagination
+        count_query = 'SELECT COUNT(*) FROM lucky_winner_selected_events WHERE winner_address = ?'
+        count_params = [address]
+        
+        if token_address:
+            count_query += ' AND token_address = ?'
+            count_params.append(token_address)
+        
+        cursor.execute(count_query, count_params)
+        total_wins = cursor.fetchone()[0]
+        
+        # Convert to list of dictionaries
+        result = []
+        for win in wins:
+            # Format timestamp as ISO date
+            timestamp = datetime.fromtimestamp(win['block_timestamp']).isoformat()
+            
+            result.append({
+                "id": win['id'],
+                "tx_hash": win['tx_hash'],
+                "block_number": win['block_number'],
+                "timestamp": timestamp,
+                "pond_type": win['pond_type'],
+                "prize": win['prize'],
+                "selector": win['selector'],
+                "token_address": win['token_address']
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            "address": address,
+            "wins": result,
+            "total_wins": total_wins,
+            "limit": limit,
+            "offset": offset
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting user wins: {e}")
         return jsonify({
             "status": "error",
             "message": str(e),
@@ -556,145 +885,6 @@ def apply_referral():
             "timestamp": datetime.now().isoformat()
         }), 500
 
-@app.route('/events/tosses/<address>', methods=['GET'])
-@require_api_key
-def get_user_tosses(address):
-    """
-    Get list of coin toss events for a specific user.
-    Query parameters:
-    - limit: number of results (default 20)
-    - offset: pagination offset (default 0)
-    """
-    try:
-        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
-        offset = int(request.args.get('offset', 0))
-        address = address.lower()
-        
-        # Get events database connection
-        conn = events_db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get toss events
-        cursor.execute('''
-        SELECT 
-            id, tx_hash, block_number, block_timestamp, pond_type, 
-            amount, timestamp, total_pond_tosses, total_pond_value
-        FROM coin_tossed_events 
-        WHERE frog_address = ?
-        ORDER BY block_timestamp DESC
-        LIMIT ? OFFSET ?
-        ''', (address, limit, offset))
-        
-        tosses = cursor.fetchall()
-        
-        # Count total tosses for pagination
-        cursor.execute('SELECT COUNT(*) FROM coin_tossed_events WHERE frog_address = ?', (address,))
-        total_tosses = cursor.fetchone()[0]
-        
-        # Convert to list of dictionaries
-        result = []
-        for toss in tosses:
-            # Format timestamp as ISO date
-            timestamp = datetime.fromtimestamp(toss['block_timestamp']).isoformat()
-            
-            result.append({
-                "id": toss['id'],
-                "tx_hash": toss['tx_hash'],
-                "block_number": toss['block_number'],
-                "timestamp": timestamp,
-                "pond_type": toss['pond_type'],
-                "amount": toss['amount'],
-                "total_pond_tosses": toss['total_pond_tosses'],
-                "total_pond_value": toss['total_pond_value']
-            })
-        
-        conn.close()
-        
-        return jsonify({
-            "address": address,
-            "tosses": result,
-            "total_tosses": total_tosses,
-            "limit": limit,
-            "offset": offset
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error getting user tosses: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-@app.route('/events/wins/<address>', methods=['GET'])
-@require_api_key
-def get_user_wins(address):
-    """
-    Get list of winner events for a specific user.
-    Query parameters:
-    - limit: number of results (default 20)
-    - offset: pagination offset (default 0)
-    """
-    try:
-        limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
-        offset = int(request.args.get('offset', 0))
-        address = address.lower()
-        
-        # Get events database connection
-        conn = events_db.get_connection()
-        cursor = conn.cursor()
-        
-        # Get win events
-        cursor.execute('''
-        SELECT 
-            id, tx_hash, block_number, block_timestamp, pond_type, 
-            prize, selector
-        FROM lucky_winner_selected_events 
-        WHERE winner_address = ?
-        ORDER BY block_timestamp DESC
-        LIMIT ? OFFSET ?
-        ''', (address, limit, offset))
-        
-        wins = cursor.fetchall()
-        
-        # Count total wins for pagination
-        cursor.execute('SELECT COUNT(*) FROM lucky_winner_selected_events WHERE winner_address = ?', (address,))
-        total_wins = cursor.fetchone()[0]
-        
-        # Convert to list of dictionaries
-        result = []
-        for win in wins:
-            # Format timestamp as ISO date
-            timestamp = datetime.fromtimestamp(win['block_timestamp']).isoformat()
-            
-            result.append({
-                "id": win['id'],
-                "tx_hash": win['tx_hash'],
-                "block_number": win['block_number'],
-                "timestamp": timestamp,
-                "pond_type": win['pond_type'],
-                "prize": win['prize'],
-                "selector": win['selector']
-            })
-        
-        conn.close()
-        
-        return jsonify({
-            "address": address,
-            "wins": result,
-            "total_wins": total_wins,
-            "limit": limit,
-            "offset": offset
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error getting user wins: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
 @app.route('/', methods=['GET'])
 def api_documentation():
     """API documentation endpoint."""
@@ -738,14 +928,28 @@ def api_documentation():
                 "description": "Get detailed data for a specific user",
                 "authentication": auth_status
             },
-            "/winners/recent": {
+            "/events/wins": {
                 "methods": ["GET"],
-                "description": "Get list of recent winners",
+                "description": "Get list of winner events",
                 "authentication": auth_status,
                 "parameters": {
                     "limit": "Number of results to return",
                     "offset": "Pagination offset",
-                    "pond_type": "Filter by pond type (optional)"
+                    "pond_type": "Filter by pond type (optional)",
+                    "token_address": "Filter by token address (optional)",
+                    "user_address": "Filter by user address (optional)"
+                }
+            },
+            "/events/tosses": {
+                "methods": ["GET"],
+                "description": "Get list of coin toss events",
+                "authentication": auth_status,
+                "parameters": {
+                    "limit": "Number of results to return",
+                    "offset": "Pagination offset",
+                    "pond_type": "Filter by pond type (optional)",
+                    "token_address": "Filter by token address (optional)",
+                    "user_address": "Filter by user address (optional)"
                 }
             },
             "/referral/code/<address>": {
@@ -768,7 +972,8 @@ def api_documentation():
                 "authentication": auth_status,
                 "parameters": {
                     "limit": "Number of results to return",
-                    "offset": "Pagination offset"
+                    "offset": "Pagination offset",
+                    "token_address": "Filter by token address (optional)"
                 }
             },
             "/events/wins/<address>": {
@@ -777,7 +982,8 @@ def api_documentation():
                 "authentication": auth_status,
                 "parameters": {
                     "limit": "Number of results to return",
-                    "offset": "Pagination offset"
+                    "offset": "Pagination offset",
+                    "token_address": "Filter by token address (optional)"
                 }
             }
         },
