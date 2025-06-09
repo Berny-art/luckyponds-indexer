@@ -161,7 +161,7 @@ def main():
     if winner_enabled:
         # Winner selection only runs on specific schedules
         # Hourly ponds: 1 minute 10 seconds after each hour
-        schedule.every().hour.at("01:10").do(run_winner_selection)
+        # schedule.every().hour.at("01:10").do(run_winner_selection)
         
         # Daily ponds: 1 minute 15 seconds after midnight UTC
         schedule.every().day.at("00:01:15").do(run_winner_selection)
