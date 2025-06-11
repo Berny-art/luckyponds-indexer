@@ -7,14 +7,19 @@
           "type": "address"
         },
         {
-          "internalType": "uint256",
+          "internalType": "uint32",
           "name": "_feePercent",
-          "type": "uint256"
+          "type": "uint32"
         },
         {
-          "internalType": "uint256",
+          "internalType": "uint32",
           "name": "_selectionTimelock",
-          "type": "uint256"
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "_maxParticipantsPerPond",
+          "type": "uint32"
         }
       ],
       "stateMutability": "nonpayable",
@@ -68,6 +73,11 @@
     },
     {
       "inputs": [],
+      "name": "InvalidBatchSize",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "InvalidParameters",
       "type": "error"
     },
@@ -84,6 +94,11 @@
     {
       "inputs": [],
       "name": "NoPondParticipants",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ParticipantLimitExceeded",
       "type": "error"
     },
     {
@@ -140,6 +155,11 @@
     {
       "inputs": [],
       "name": "TransferFailed",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "WeightedSelectionFailed",
       "type": "error"
     },
     {
@@ -280,6 +300,31 @@
       "anonymous": false,
       "inputs": [
         {
+          "indexed": false,
+          "internalType": "string",
+          "name": "operation",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "participantCount",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "gasUsed",
+          "type": "uint256"
+        }
+      ],
+      "name": "GasUsageReport",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
           "indexed": true,
           "internalType": "bytes32",
           "name": "pondType",
@@ -311,6 +356,31 @@
         }
       ],
       "name": "LuckyWinnerSelected",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "pondType",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "participantCount",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "warningThreshold",
+          "type": "uint256"
+        }
+      ],
+      "name": "ParticipantLimitWarning",
       "type": "event"
     },
     {
@@ -489,6 +559,61 @@
       "type": "event"
     },
     {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "pondType",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "winner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "entropySource",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "randomValue",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "totalFrogValue",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "winningThreshold",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "blockNumber",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "blockHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "WinnerSelectionDetails",
+      "type": "event"
+    },
+    {
       "inputs": [],
       "name": "ADMIN_ROLE",
       "outputs": [
@@ -627,6 +752,29 @@
     {
       "inputs": [
         {
+          "internalType": "bytes32",
+          "name": "_pondType",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_startIdx",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_endIdx",
+          "type": "uint256"
+        }
+      ],
+      "name": "batchClearParticipants",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
           "internalType": "bytes",
           "name": "",
           "type": "bytes"
@@ -643,6 +791,49 @@
           "internalType": "bytes",
           "name": "performData",
           "type": "bytes"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "config",
+      "outputs": [
+        {
+          "internalType": "uint128",
+          "name": "defaultMinTossPrice",
+          "type": "uint128"
+        },
+        {
+          "internalType": "uint128",
+          "name": "defaultMaxTotalTossAmount",
+          "type": "uint128"
+        },
+        {
+          "internalType": "uint32",
+          "name": "maxParticipantsPerPond",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "emergencyBatchSize",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "feePercent",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "selectionTimelock",
+          "type": "uint32"
+        },
+        {
+          "internalType": "address",
+          "name": "feeAddress",
+          "type": "address"
         }
       ],
       "stateMutability": "view",
@@ -702,32 +893,6 @@
       "type": "function"
     },
     {
-      "inputs": [],
-      "name": "defaultMaxTotalTossAmount",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "defaultMinTossPrice",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
       "inputs": [
         {
           "internalType": "bytes32",
@@ -765,38 +930,62 @@
     },
     {
       "inputs": [],
-      "name": "feeAddress",
-      "outputs": [
-        {
-          "internalType": "address",
-          "name": "",
-          "type": "address"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
-      "name": "feePercent",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
-      "inputs": [],
       "name": "getAllPondTypes",
       "outputs": [
         {
           "internalType": "bytes32[]",
           "name": "",
           "type": "bytes32[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getConfig",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint128",
+              "name": "defaultMinTossPrice",
+              "type": "uint128"
+            },
+            {
+              "internalType": "uint128",
+              "name": "defaultMaxTotalTossAmount",
+              "type": "uint128"
+            },
+            {
+              "internalType": "uint32",
+              "name": "maxParticipantsPerPond",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "emergencyBatchSize",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "feePercent",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint32",
+              "name": "selectionTimelock",
+              "type": "uint32"
+            },
+            {
+              "internalType": "address",
+              "name": "feeAddress",
+              "type": "address"
+            }
+          ],
+          "internalType": "struct PondCore.Config",
+          "name": "",
+          "type": "tuple"
         }
       ],
       "stateMutability": "view",
@@ -1122,17 +1311,41 @@
           "type": "address"
         }
       ],
+      "name": "participantIndex",
+      "outputs": [
+        {
+          "internalType": "uint32",
+          "name": "",
+          "type": "uint32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
       "name": "participants",
       "outputs": [
         {
-          "internalType": "uint256",
+          "internalType": "uint128",
           "name": "amount",
-          "type": "uint256"
+          "type": "uint128"
         },
         {
-          "internalType": "bool",
-          "name": "exists",
-          "type": "bool"
+          "internalType": "uint128",
+          "name": "lastTossIndex",
+          "type": "uint128"
         }
       ],
       "stateMutability": "view",
@@ -1208,12 +1421,17 @@
           "type": "uint256"
         }
       ],
-      "name": "pondValues",
+      "name": "pondTosses",
       "outputs": [
         {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
+          "internalType": "uint32",
+          "name": "participantIndex",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint224",
+          "name": "value",
+          "type": "uint224"
         }
       ],
       "stateMutability": "view",
@@ -1245,9 +1463,14 @@
           "type": "uint64"
         },
         {
-          "internalType": "uint64",
-          "name": "paddingA",
-          "type": "uint64"
+          "internalType": "uint32",
+          "name": "totalParticipants",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reserved",
+          "type": "uint32"
         },
         {
           "internalType": "uint128",
@@ -1260,14 +1483,9 @@
           "type": "uint128"
         },
         {
-          "internalType": "uint64",
+          "internalType": "uint128",
           "name": "minTossPrice",
-          "type": "uint64"
-        },
-        {
-          "internalType": "uint64",
-          "name": "paddingB",
-          "type": "uint64"
+          "type": "uint128"
         },
         {
           "internalType": "uint128",
@@ -1371,19 +1589,6 @@
       "type": "function"
     },
     {
-      "inputs": [],
-      "name": "selectionTimelock",
-      "outputs": [
-        {
-          "internalType": "uint256",
-          "name": "",
-          "type": "uint256"
-        }
-      ],
-      "stateMutability": "view",
-      "type": "function"
-    },
-    {
       "inputs": [
         {
           "internalType": "address",
@@ -1399,9 +1604,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "uint32",
           "name": "_newFeePercent",
-          "type": "uint256"
+          "type": "uint32"
         }
       ],
       "name": "setFeePercent",
@@ -1412,9 +1617,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "uint32",
           "name": "_newTimelock",
-          "type": "uint256"
+          "type": "uint32"
         }
       ],
       "name": "setSelectionTimelock",
@@ -1487,12 +1692,12 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
-          "name": "_newDefaultMaxAmount",
-          "type": "uint256"
+          "internalType": "uint32",
+          "name": "_newBatchSize",
+          "type": "uint32"
         }
       ],
-      "name": "updateDefaultMaxTotalTossAmount",
+      "name": "updateEmergencyBatchSize",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -1500,30 +1705,12 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
-          "name": "_newDefaultMinPrice",
-          "type": "uint256"
+          "internalType": "uint32",
+          "name": "_newMaxParticipants",
+          "type": "uint32"
         }
       ],
-      "name": "updateDefaultMinTossPrice",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        {
-          "internalType": "bytes32",
-          "name": "_pondType",
-          "type": "bytes32"
-        },
-        {
-          "internalType": "uint256",
-          "name": "_newMaxAmount",
-          "type": "uint256"
-        }
-      ],
-      "name": "updateMaxTotalTossAmount",
+      "name": "updateMaxParticipantsPerPond",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -1536,12 +1723,30 @@
           "type": "bytes32"
         },
         {
-          "internalType": "uint256",
-          "name": "_newMinPrice",
-          "type": "uint256"
+          "internalType": "uint128",
+          "name": "_newMaxTotalTossAmount",
+          "type": "uint128"
         }
       ],
-      "name": "updateMinTossPrice",
+      "name": "updatePondMaxTotalTossAmount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "_pondType",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint128",
+          "name": "_newMinTossPrice",
+          "type": "uint128"
+        }
+      ],
+      "name": "updatePondMinTossPrice",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
