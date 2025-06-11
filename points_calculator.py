@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 # Import our database access layers and utilities
 from data_access import EventsDatabase, ApplicationDatabase
+from token_config import TokenConfig
 from utils import (
     get_events_db_path, 
     get_app_db_path, 
@@ -37,6 +38,7 @@ class PointsCalculator:
         """
         self.app_db = ApplicationDatabase(app_db_path)
         self.events_db = EventsDatabase(events_db_path)
+        self.token_config = TokenConfig()
         self.ensure_calculator_state()
         
     def ensure_calculator_state(self):
@@ -95,11 +97,15 @@ class PointsCalculator:
             pond_type = event['pond_type']
             address = event['frog_address']
             amount = event['amount']
+            token_address = event.get('token_address', '0x0000000000000000000000000000000000000000')
             
-            # Calculate points - amount in ETH * multiplier
-            amount_in_eth = float(amount) / 10**18  # Convert from wei to ETH
-            calculated_points = int(amount_in_eth) * TOSS_POINTS_MULTIPLIER
-            toss_points = max(1, int(calculated_points))            
+            # Calculate points using token-aware calculation
+            toss_points = self.token_config.calculate_points(
+                amount=amount,
+                token_address=token_address,
+                pond_type=pond_type,
+                multiplier=TOSS_POINTS_MULTIPLIER
+            )
             
             # Award toss points
             self.add_user_points(address, 'toss', toss_points, tx_hash, pond_type, block_timestamp)

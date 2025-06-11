@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 # Import our database access layers and components
 from data_access import EventsDatabase, ApplicationDatabase
+from token_config import TokenConfig
 from utils import (
     get_events_db_path, 
     get_app_db_path, 
@@ -75,11 +76,14 @@ def reset_points_data():
         conn.close()
 
 def process_toss_events(batch_size=1000):
-    """Process all coin toss events from the beginning with minimum 1 point rule."""
+    """Process all coin toss events from the beginning using token-aware points calculation."""
     logger.info("Processing all coin toss events...")
     
     events_db = EventsDatabase(EVENTS_DB_PATH)
     app_db = ApplicationDatabase(APP_DB_PATH)
+    
+    # Initialize token configuration for points calculation
+    token_config = TokenConfig()
     
     # Get all toss events
     conn = events_db.get_connection()
@@ -100,7 +104,7 @@ def process_toss_events(batch_size=1000):
     try:
         while True:
             cursor.execute('''
-            SELECT id, tx_hash, block_timestamp, pond_type, frog_address, amount
+            SELECT id, tx_hash, block_timestamp, pond_type, frog_address, amount, token_address
             FROM coin_tossed_events
             ORDER BY id ASC
             LIMIT ? OFFSET ?
@@ -120,11 +124,15 @@ def process_toss_events(batch_size=1000):
                 pond_type = event['pond_type']
                 address = event['frog_address'].lower()
                 amount = event['amount']
+                token_address = event.get('token_address', '0x0000000000000000000000000000000000000000')
                 
-                # Calculate points with minimum 1 point
-                amount_in_eth = float(amount) / 10**18
-                calculated_points = amount_in_eth * TOSS_POINTS_MULTIPLIER
-                toss_points = max(1, int(calculated_points))
+                # Calculate points using token-aware calculation
+                toss_points = token_config.calculate_points(
+                    amount=amount,
+                    token_address=token_address,
+                    pond_type=pond_type,
+                    multiplier=TOSS_POINTS_MULTIPLIER
+                )
                 
                 # Ensure user exists in points table
                 app_cursor.execute('''

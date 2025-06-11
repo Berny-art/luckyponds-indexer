@@ -99,7 +99,7 @@ class EventsDatabase(Database):
         """Get unprocessed coin toss events"""
         rows = self.execute_query(
             '''
-            SELECT id, tx_hash, block_timestamp, pond_type, frog_address, amount
+            SELECT id, tx_hash, block_timestamp, pond_type, frog_address, amount, token_address
             FROM coin_tossed_events
             WHERE id > ?
             ORDER BY id ASC
