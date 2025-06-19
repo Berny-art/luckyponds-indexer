@@ -1033,7 +1033,9 @@ def api_documentation():
                     "offset": "Pagination offset",
                     "pond_type": "Filter by pond type (optional)",
                     "token_address": "Filter by token address (optional)",
-                    "user_address": "Filter by user address (optional)"
+                    "user_address": "Filter by user address (optional)",
+                    "start_time": "Filter by start time in timestamp format (optional)",
+                    "end_time": "Filter by end time in timestamp format (optional)"
                 }
             },
             "/events/tosses": {
@@ -1045,7 +1047,9 @@ def api_documentation():
                     "offset": "Pagination offset",
                     "pond_type": "Filter by pond type (optional)",
                     "token_address": "Filter by token address (optional)",
-                    "user_address": "Filter by user address (optional)"
+                    "user_address": "Filter by user address (optional)",
+                    "start_time": "Filter by start time in timestamp format (optional)",
+                    "end_time": "Filter by end time in timestamp format (optional)"
                 }
             },
             "/referral/code/<address>": {
@@ -1069,7 +1073,9 @@ def api_documentation():
                 "parameters": {
                     "limit": "Number of results to return",
                     "offset": "Pagination offset",
-                    "token_address": "Filter by token address (optional)"
+                    "token_address": "Filter by token address (optional)",
+                    "start_time": "Filter by start time in timestamp format (optional)",
+                    "end_time": "Filter by end time in timestamp format (optional)"
                 }
             },
             "/events/wins/<address>": {
@@ -1079,7 +1085,9 @@ def api_documentation():
                 "parameters": {
                     "limit": "Number of results to return",
                     "offset": "Pagination offset",
-                    "token_address": "Filter by token address (optional)"
+                    "token_address": "Filter by token address (optional)",
+                    "start_time": "Filter by start time in timestamp format (optional)",
+                    "end_time": "Filter by end time in timestamp format (optional)"
                 }
             }
         },
