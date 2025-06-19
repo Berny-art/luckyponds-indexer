@@ -400,6 +400,8 @@ def get_wins():
     - pond_type: filter by pond type (optional)
     - token_address: filter by token address (optional)
     - user_address: filter by user address (optional)
+    - start_time: filter events after this timestamp (ISO format, optional)
+    - end_time: filter events before this timestamp (ISO format, optional)
     """
     try:
         limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
@@ -407,12 +409,24 @@ def get_wins():
         pond_type = request.args.get('pond_type')
         token_address = request.args.get('token_address')
         user_address = request.args.get('user_address')
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
         
         # Normalize addresses if provided
         if token_address:
             token_address = token_address.lower()
         if user_address:
             user_address = user_address.lower()
+            
+        # Parse datetime parameters if provided
+        start_timestamp = None
+        end_timestamp = None
+        
+        if start_time:
+            start_timestamp = int(datetime.fromisoformat(start_time).timestamp())
+        
+        if end_time:
+            end_timestamp = int(datetime.fromisoformat(end_time).timestamp())
         
         # Get events database connection
         conn = events_db.get_connection()
@@ -447,6 +461,15 @@ def get_wins():
         if user_address:
             query += ' AND lw.winner_address = ?'
             params.append(user_address)
+            
+        # Add time range filters
+        if start_timestamp:
+            query += ' AND lw.block_timestamp >= ?'
+            params.append(start_timestamp)
+            
+        if end_timestamp:
+            query += ' AND lw.block_timestamp <= ?'
+            params.append(end_timestamp)
         
         # Add ordering and pagination
         query += ' ORDER BY lw.block_timestamp DESC LIMIT ? OFFSET ?'
@@ -470,6 +493,15 @@ def get_wins():
         if user_address:
             count_query += ' AND winner_address = ?'
             count_params.append(user_address)
+            
+        # Add time range filters to count query
+        if start_timestamp:
+            count_query += ' AND block_timestamp >= ?'
+            count_params.append(start_timestamp)
+            
+        if end_timestamp:
+            count_query += ' AND block_timestamp <= ?'
+            count_params.append(end_timestamp)
         
         cursor.execute(count_query, count_params)
         total_winners = cursor.fetchone()[0]
@@ -639,16 +671,30 @@ def get_user_tosses(address):
     - limit: number of results (default 20)
     - offset: pagination offset (default 0)
     - token_address: filter by token address (optional)
+    - start_time: filter events after this timestamp (ISO format, optional)
+    - end_time: filter events before this timestamp (ISO format, optional)
     """
     try:
         limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
         offset = int(request.args.get('offset', 0))
         token_address = request.args.get('token_address')
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
         address = address.lower()
         
         # Normalize token address if provided
         if token_address:
             token_address = token_address.lower()
+            
+        # Parse datetime parameters if provided
+        start_timestamp = None
+        end_timestamp = None
+        
+        if start_time:
+            start_timestamp = int(datetime.fromisoformat(start_time).timestamp())
+        
+        if end_time:
+            end_timestamp = int(datetime.fromisoformat(end_time).timestamp())
         
         # Get events database connection
         conn = events_db.get_connection()
@@ -667,6 +713,15 @@ def get_user_tosses(address):
         if token_address:
             query += ' AND token_address = ?'
             params.append(token_address)
+            
+        # Add time range filters
+        if start_timestamp:
+            query += ' AND block_timestamp >= ?'
+            params.append(start_timestamp)
+            
+        if end_timestamp:
+            query += ' AND block_timestamp <= ?'
+            params.append(end_timestamp)
         
         query += ' ORDER BY block_timestamp DESC LIMIT ? OFFSET ?'
         params.extend([limit, offset])
@@ -681,6 +736,15 @@ def get_user_tosses(address):
         if token_address:
             count_query += ' AND token_address = ?'
             count_params.append(token_address)
+            
+        # Add time range filters to count query
+        if start_timestamp:
+            count_query += ' AND block_timestamp >= ?'
+            count_params.append(start_timestamp)
+            
+        if end_timestamp:
+            count_query += ' AND block_timestamp <= ?'
+            count_params.append(end_timestamp)
         
         cursor.execute(count_query, count_params)
         total_tosses = cursor.fetchone()[0]
@@ -730,16 +794,30 @@ def get_user_wins(address):
     - limit: number of results (default 20)
     - offset: pagination offset (default 0)
     - token_address: filter by token address (optional)
+    - start_time: filter events after this timestamp (ISO format, optional)
+    - end_time: filter events before this timestamp (ISO format, optional)
     """
     try:
         limit = min(int(request.args.get('limit', 20)), 100)  # Max 100 results
         offset = int(request.args.get('offset', 0))
         token_address = request.args.get('token_address')
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
         address = address.lower()
         
         # Normalize token address if provided
         if token_address:
             token_address = token_address.lower()
+        
+        # Parse datetime parameters if provided
+        start_timestamp = None
+        end_timestamp = None
+        
+        if start_time:
+            start_timestamp = int(datetime.fromisoformat(start_time).timestamp())
+        
+        if end_time:
+            end_timestamp = int(datetime.fromisoformat(end_time).timestamp())
         
         # Get events database connection
         conn = events_db.get_connection()
@@ -758,6 +836,15 @@ def get_user_wins(address):
         if token_address:
             query += ' AND token_address = ?'
             params.append(token_address)
+            
+        # Add time range filters
+        if start_timestamp:
+            query += ' AND block_timestamp >= ?'
+            params.append(start_timestamp)
+            
+        if end_timestamp:
+            query += ' AND block_timestamp <= ?'
+            params.append(end_timestamp)
         
         query += ' ORDER BY block_timestamp DESC LIMIT ? OFFSET ?'
         params.extend([limit, offset])
@@ -772,6 +859,15 @@ def get_user_wins(address):
         if token_address:
             count_query += ' AND token_address = ?'
             count_params.append(token_address)
+            
+        # Add time range filters to count query
+        if start_timestamp:
+            count_query += ' AND block_timestamp >= ?'
+            count_params.append(start_timestamp)
+            
+        if end_timestamp:
+            count_query += ' AND block_timestamp <= ?'
+            count_params.append(end_timestamp)
         
         cursor.execute(count_query, count_params)
         total_wins = cursor.fetchone()[0]
